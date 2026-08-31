@@ -1,0 +1,21 @@
+{
+  "secret_supabase_service_role": "supabase_service_role",
+  "secret_supabase_anon": "supabase_anon",
+  "secret_stripe_live": "stripe_live_secret",
+  "secret_stripe_test": "stripe_test_secret",
+  "secret_stripe_restricted": "stripe_restricted_key",
+  "secret_openai": "openai_key",
+  "secret_openai_legacy": "openai_key",
+  "secret_openai_admin": "openai_key",
+  "secret_openai_svc": "openai_key",
+  "secret_anthropic": "anthropic_key",
+  "secret_aws_access": "aws_access_key",
+  "secret_aws_session": "aws_access_key",
+  "secret_aws_secret": "aws_access_key",
+  "secret_github_pat": "github_token",
+  "secret_github_fine_grained": "github_token",
+  "secret_google_api": "google_api_key",
+  "secret_private_key": "private_key",
+  "secret_database_uri": "db_connection_string",
+  "secret_high_entropy": "generic_secret"
+}

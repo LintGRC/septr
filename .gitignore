@@ -1,0 +1,23 @@
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+
+# Copied into packages/septr-node at build time (npm `files` entry)
+packages/septr-node/septr-checks/
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+.pytest_cache/
+packages/septr-python/dist/
+
+# Go
+*.test
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/

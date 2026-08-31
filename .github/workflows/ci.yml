@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  npm-package:
+    name: npm package
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/septr-node
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/septr-node/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test
+      - run: npm run test:scanner
+
+  benchmark:
+    name: Security benchmark
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/septr-node
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/septr-node/package-lock.json
+      - run: npm ci
+      - run: npx vitest run src/__tests__/benchmark.test.ts src/__tests__/benchmark/
+
+  python-package:
+    name: Python package
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/septr-python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[flask,fastapi]" pytest httpx
+      - run: python -m pytest tests/ -q
+
+  go-package:
+    name: Go package
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/septr-go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - run: go vet ./...
+      - run: go test -count=1 ./...

@@ -1,0 +1,80 @@
+{
+  "name": "septr",
+  "version": "0.1.0",
+  "description": "Security middleware + CLI for vibe-coded apps. Runtime protection, source scanning, and URL probing.",
+  "type": "module",
+  "main": "./dist/core/index.js",
+  "types": "./dist/core/index.d.ts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lintgrc/septr.git"
+  },
+  "homepage": "https://github.com/lintgrc/septr",
+  "bugs": {
+    "url": "https://github.com/lintgrc/septr/issues"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/core/index.js",
+      "types": "./dist/core/index.d.ts"
+    },
+    "./express": {
+      "import": "./dist/adapters/express.js",
+      "types": "./dist/adapters/express.d.ts"
+    },
+    "./nextjs": {
+      "import": "./dist/adapters/nextjs.js",
+      "types": "./dist/adapters/nextjs.d.ts"
+    },
+    "./hono": {
+      "import": "./dist/adapters/hono.js",
+      "types": "./dist/adapters/hono.d.ts"
+    },
+    "./fastify": {
+      "import": "./dist/adapters/fastify.js",
+      "types": "./dist/adapters/fastify.d.ts"
+    }
+  },
+  "files": [
+    "bin",
+    "dist",
+    "septr-checks"
+  ],
+  "bin": {
+    "septr": "./bin/septr.js"
+  },
+  "scripts": {
+    "build": "tsup && node -e \"require('fs').cpSync('../septr-checks','septr-checks',{recursive:true})\"",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:scanner": "npm run build && node --test test/*.mjs",
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "security",
+    "middleware",
+    "scanner",
+    "ai",
+    "vibecode",
+    "express",
+    "nextjs",
+    "bola",
+    "idor",
+    "secrets",
+    "rate-limit"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "express": "^5.2.1",
+    "fastify": "^5.10.0",
+    "tsup": "^8",
+    "typescript": "^5",
+    "vitest": "^4.1.10"
+  }
+}

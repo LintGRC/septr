@@ -1,0 +1,24 @@
+[project]
+name = "septr"
+version = "0.1.0"
+description = "Runtime security middleware for vibe-coded apps"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+dependencies = []
+optional-dependencies = { flask = ["flask>=2.0"], fastapi = ["fastapi>=0.100", "uvicorn>=0.20"] }
+
+[project.urls]
+Homepage = "https://github.com/lintgrc/septr"
+Repository = "https://github.com/lintgrc/septr"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["septr*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]

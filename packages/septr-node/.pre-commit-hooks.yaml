@@ -1,0 +1,6 @@
+- id: septr-scan
+  name: Septr scan
+  description: Scan staged files for secrets, injection, SSRF, and hygiene issues (exits 1 on findings at or above high severity)
+  entry: septr scan --fail-on high --quiet
+  language: node
+  types: [text]
