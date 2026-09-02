@@ -1,6 +1,6 @@
 {
   "name": "septr",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Security middleware + CLI for vibe-coded apps. Runtime protection, source scanning, and URL probing.",
   "type": "module",
   "main": "./dist/core/index.js",
@@ -69,6 +69,10 @@
     "rate-limit"
   ],
   "license": "MIT",
+  "publishConfig": {
+    "provenance": true,
+    "access": "public"
+  },
   "devDependencies": {
     "@types/express": "^5.0.6",
     "express": "^5.2.1",
