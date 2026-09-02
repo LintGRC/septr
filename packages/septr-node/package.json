@@ -1,6 +1,6 @@
 {
   "name": "septr",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "Security middleware + CLI for vibe-coded apps. Runtime protection, source scanning, and URL probing.",
   "type": "module",
   "main": "./dist/core/index.js",
