@@ -53,6 +53,8 @@ jobs:
   publish-go:
     name: Go module (auto-published via Git tag)
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     defaults:
       run:
         working-directory: packages/septr-go
@@ -66,3 +68,8 @@ jobs:
       - run: go test ./...
       - name: Verify module is resolvable
         run: go list -m github.com/lintgrc/septr/packages/septr-go@$(git rev-parse HEAD)
+      - name: Push Go submodule tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          GO_TAG="packages/septr-go/v${VERSION}"
+          git tag "$GO_TAG" && git push origin "$GO_TAG"
