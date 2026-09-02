@@ -5,6 +5,10 @@ on:
     tags:
       - "v*"
 
+permissions:
+  id-token: write
+  contents: read
+
 jobs:
   publish-npm:
     name: Publish to npm
@@ -22,9 +26,7 @@ jobs:
           cache-dependency-path: packages/septr-node/package-lock.json
       - run: npm ci
       - run: npm run build
-      - run: npm publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - run: npm publish --provenance --access public
 
   publish-pypi:
     name: Publish to PyPI
@@ -44,7 +46,6 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: packages/septr-python/dist
-          password: ${{ secrets.PYPI_TOKEN }}
 
   publish-go:
     name: Go module (auto-published via Git tag)
