@@ -1,5 +1,5 @@
 [project]
-name = "septr-python"
+name = "septr"
 version = "0.1.0"
 description = "Runtime security middleware for vibe-coded apps"
 readme = "README.md"
