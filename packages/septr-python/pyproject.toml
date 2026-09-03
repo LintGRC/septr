@@ -1,6 +1,6 @@
 [project]
 name = "septr"
-version = "0.1.19"
+version = "0.1.20"
 description = "Runtime security middleware for vibe-coded apps: secrets, BOLA/IDOR, SSRF, prompt injection, rate limiting"
 readme = "README.md"
 license = { text = "MIT" }
