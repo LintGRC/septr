@@ -11,3 +11,18 @@ test/
 
 # Probe-path catalog: URL paths that intentionally look like attack strings
 septr-checks/probe-paths.json
+
+# Detection pattern definitions — the attack strings ARE the product here
+src/core/sanitize.ts
+src/core/ssrf.ts
+
+# Self-test engine: fires every detector with representative payloads
+src/core/self-test.ts
+
+# CLI `test` command embeds attack payloads; self-test blocks live in
+# the adapters (inline, mixed with real middleware logic)
+src/cli.ts
+src/adapters/express.ts
+src/adapters/fastify.ts
+src/adapters/hono.ts
+src/adapters/nextjs.ts
