@@ -1,11 +1,28 @@
-# septr — runtime security middleware for Node.js
+# septr — runtime security for AI-generated apps
 
-Protects Express, Next.js, Hono, and Fastify apps at runtime: secrets
-leaking in responses, BOLA/IDOR, missing auth, business-logic tampering,
-PII, prompt injection, SSRF, and missing rate limits. Auto-verified against
-the Septr backend, with per-engine SOC 2 evidence for your dashboard.
+[![npm version](https://img.shields.io/npm/v/septr?color=3d7dd8&label=npm)](https://www.npmjs.com/package/septr)
+[![PyPI version](https://img.shields.io/pypi/v/septr?color=3d7dd8&label=pypi)](https://pypi.org/project/septr/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-3d7dd8)](LICENSE)
 
-## Install
+Septr is an open-source security layer for AI-generated apps. It scans deployed apps for exposed secrets, missing security headers, vulnerable dependencies, and exposed files — then protects the runtime with in-process middleware.
+
+**Every AI app leaks something. Yours doesn't have to.**
+
+- **Scan** — URL probe of a deployed app: leaked API keys, `.env` exposure, missing headers, known-vulnerable frontend libraries, exposed admin routes.
+- **Protect** — runtime middleware that detects and (optionally) blocks secret leaks, BOLA/IDOR, missing auth, business-logic tampering, PII in responses, prompt injection, SSRF, and missing rate limits.
+- **Monitor** — dashboard with security score, threat log, and per-engine evidence.
+
+Try it free: **[septr.dev](https://septr.dev)** · Docs: **[septr.dev/docs.html](https://septr.dev/docs.html)**
+
+## Supported frameworks
+
+| Language | Frameworks | Install |
+|---|---|---|
+| Node.js | Express, Next.js, Hono, Fastify | `npm install septr` |
+| Python | FastAPI, Flask | `pip install septr` |
+| Go | Gin, net/http | `go get github.com/lintgrc/septr/packages/septr-go` |
+
+## Quick start (Express)
 
 ```bash
 npm install septr
@@ -17,53 +34,52 @@ Add your key to `.env`:
 SEPTR_API_KEY=septr_live_...
 ```
 
-## Express
-
 ```js
 import { createSeptr } from "septr"
 
 app.use(createSeptr({ apiKey: process.env.SEPTR_API_KEY }))
 ```
 
-## Next.js
+That's it. Septr verifies the connection on your app's first request and starts protecting every route.
 
-Create `middleware.ts` (or `src/middleware.ts`) at the project root:
+## Quick start (FastAPI)
 
-```ts
-import { createSeptr } from "septr"
-
-export default createSeptr({ apiKey: process.env.SEPTR_API_KEY })
-
-export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
-}
+```bash
+pip install septr
 ```
 
-## Hono
+```python
+from fastapi import FastAPI
+from septr.adapters.fastapi import SeptrASGIMiddleware
+import os
 
-```ts
-import { createSeptr } from "septr"
+app = FastAPI()
 
-app.use("*", createSeptr({ apiKey: process.env.SEPTR_API_KEY }))
+app.add_middleware(
+    SeptrASGIMiddleware,
+    api_key=os.getenv("SEPTR_API_KEY")
+)
 ```
 
-## Fastify
+## Detection engines
 
-```ts
-import { createSeptr } from "septr"
+- **Secret/PII leak** — 22 patterns for API keys, tokens, credentials in responses; auto-scrubs with `[REDACTED]`
+- **BOLA/IDOR** — JWT claims vs. route params
+- **SQLi / XSS / NoSQLi** — input sanitization
+- **SSRF** — heuristics on outbound URLs
+- **Prompt injection** — 24 jailbreak patterns for AI endpoints
+- **Missing auth** — unauthenticated route detection
+- **Business-logic tampering** — request mutation detection
+- **Rate limiting** — 60/min general, 10/min auth, 5/min AI
+- **Missing security headers** — detection and injection
+- **Cross-tenant leaks** — multi-tenant isolation checks
 
-const shield = createSeptr({ apiKey: process.env.SEPTR_API_KEY })
-fastify.addHook("onRequest", shield.onRequest)
-fastify.addHook("preHandler", shield.preHandler)
-fastify.addHook("preSerialization", shield.preSerialization)
-```
-
-## Config
+## Options
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `apiKey` | string | env `SEPTR_API_KEY` | Backend API key |
-| `strictMode` | boolean | `false` | Block instead of detect |
+| `apiKey` | string | env `SEPTR_API_KEY` | Your project API key |
+| `strictMode` | boolean | `false` | Block requests instead of detecting |
 | `secrets` | boolean | `true` | Secret/PII detection + response scrubbing |
 | `bola` | boolean | `true` | BOLA/IDOR detection |
 | `rateLimit` | boolean | `true` | Per-route rate limiting |
@@ -77,12 +93,16 @@ fastify.addHook("preSerialization", shield.preSerialization)
 | `telemetryUrl` | string | `https://api.septr.com/v1/events` | Telemetry endpoint |
 | `remoteConfig` | boolean | `true` | Poll backend for live config |
 
-## Environment variables
+## Fail-open guarantee
 
-- `SEPTR_API_KEY` — your project key
-- `SEPTR_SILENCE_ENV_WARNING` — set to `1` to silence the fail-loud
-  missing-key warning
-- `SEPTR_REMOTE_CONFIG=false` — disable remote config polling
+If Septr ever throws, it logs the error and passes the request through. Your app never goes down because of its bodyguard.
+
+## Repo layout
+
+- `packages/septr-node` — Node.js middleware + CLI (published to npm)
+- `packages/septr-python` — Python middleware (published to PyPI)
+- `packages/septr-go` — Go middleware
+- `packages/septr-checks` — shared detection rules (JSON)
 
 ## License
 

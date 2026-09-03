@@ -1,16 +1,25 @@
 [project]
 name = "septr"
-version = "0.1.13"
-description = "Runtime security middleware for vibe-coded apps"
+version = "0.1.0"
+description = "Runtime security middleware for vibe-coded apps: secrets, BOLA/IDOR, SSRF, prompt injection, rate limiting"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.9"
+keywords = ["security", "ai-security", "vibe-coding", "fastapi", "flask", "middleware", "secrets", "ssrf", "prompt-injection", "bola"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Topic :: Security",
+]
 dependencies = []
 optional-dependencies = { flask = ["flask>=2.0"], fastapi = ["fastapi>=0.100", "uvicorn>=0.20"] }
 
 [project.urls]
-Homepage = "https://github.com/LintGRC/septr"
-Repository = "https://github.com/LintGRC/septr"
+Homepage = "https://github.com/lintgrc/septr"
+Repository = "https://github.com/lintgrc/septr"
+Documentation = "https://septr.dev/docs.html"
 
 [build-system]
 requires = ["setuptools>=68.0"]

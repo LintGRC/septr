@@ -1,18 +1,35 @@
 {
   "name": "septr",
-  "version": "0.1.13",
+  "version": "0.1.0",
   "description": "Security middleware + CLI for vibe-coded apps. Runtime protection, source scanning, and URL probing.",
   "type": "module",
   "main": "./dist/core/index.js",
   "types": "./dist/core/index.d.ts",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/LintGRC/septr.git"
+    "url": "git+https://github.com/lintgrc/septr.git"
   },
-  "homepage": "https://github.com/LintGRC/septr",
+  "homepage": "https://github.com/lintgrc/septr",
   "bugs": {
-    "url": "https://github.com/LintGRC/septr/issues"
+    "url": "https://github.com/lintgrc/septr/issues"
   },
+  "keywords": [
+    "security",
+    "ai-security",
+    "vibe-coding",
+    "lovable",
+    "bolt",
+    "supabase",
+    "middleware",
+    "static-analysis",
+    "secrets",
+    "ssrf",
+    "prompt-injection",
+    "bola",
+    "rls"
+  ],
+  "author": "LintGRC",
+  "license": "MIT",
   "engines": {
     "node": ">=18"
   },
@@ -69,10 +86,6 @@
     "rate-limit"
   ],
   "license": "MIT",
-  "publishConfig": {
-    "provenance": true,
-    "access": "public"
-  },
   "devDependencies": {
     "@types/express": "^5.0.6",
     "express": "^5.2.1",
