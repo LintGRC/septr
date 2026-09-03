@@ -3,10 +3,28 @@
 [![npm version](https://img.shields.io/npm/v/septr?color=3d7dd8&label=npm)](https://www.npmjs.com/package/septr)
 [![PyPI version](https://img.shields.io/pypi/v/septr?color=3d7dd8&label=pypi)](https://pypi.org/project/septr/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-3d7dd8)](LICENSE)
+[![Security Policy](https://img.shields.io/badge/security-policy-blue)](SECURITY.md)
 
 Septr is an open-source security layer for AI-generated apps. It scans deployed apps for exposed secrets, missing security headers, vulnerable dependencies, and exposed files — then protects the runtime with in-process middleware.
 
 **Every AI app leaks something. Yours doesn't have to.**
+
+### Verify this package
+
+Septr is published on [npm](https://www.npmjs.com/package/septr) and [PyPI](https://pypi.org/project/septr/) with provenance attestation. The source code is public at [github.com/LintGRC/septr](https://github.com/LintGRC/septr). Before installing:
+
+```bash
+# Node.js — check registry metadata, repo, and license
+npm view septr homepage repository license
+
+# Python — check PyPI metadata
+pip index versions septr
+
+# Go — check module registry
+go list -m github.com/lintgrc/septr/packages/septr-go
+```
+
+You'll see the public repo (`github.com/LintGRC/septr`), MIT license, and documentation at [septr.dev/docs.html](https://septr.dev/docs.html).
 
 - **Scan** — URL probe of a deployed app: leaked API keys, `.env` exposure, missing headers, known-vulnerable frontend libraries, exposed admin routes.
 - **Protect** — runtime middleware that detects and (optionally) blocks secret leaks, BOLA/IDOR, missing auth, business-logic tampering, PII in responses, prompt injection, SSRF, and missing rate limits.
@@ -14,7 +32,15 @@ Septr is an open-source security layer for AI-generated apps. It scans deployed 
 
 Try it free: **[septr.dev](https://septr.dev)** · Docs: **[septr.dev/docs.html](https://septr.dev/docs.html)**
 
-## Supported frameworks
+### Try it now (no install)
+
+```bash
+npx septr scan https://your-app.example.com
+```
+
+Zero-dependency scan of any deployed app. No code changes, no package installed — just results.
+
+### Supported frameworks
 
 | Language | Frameworks | Install |
 |---|---|---|
