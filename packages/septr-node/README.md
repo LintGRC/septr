@@ -77,6 +77,16 @@ fastify.addHook("preSerialization", shield.preSerialization)
 | `telemetryUrl` | string | `https://api.septr.com/v1/events` | Telemetry endpoint |
 | `remoteConfig` | boolean | `true` | Poll backend for live config |
 
+## Source scanning (CLI)
+
+```bash
+npx septr scan .            # scan the current directory
+npx septr scan . --json    # machine-readable findings
+npx septr scan . --exclude "src/__tests__/**"   # skip paths (repeatable)
+```
+
+Exclude paths with a committed `.septrignore` file (gitignore-style patterns) in your project root — exclusions are explicit and auditable. Test fixture payloads (`__tests__/benchmark/**`, `*-payloads.*`, `fixtures/**`) are skipped by default; everything else, including tests, is scanned.
+
 ## Environment variables
 
 - `SEPTR_API_KEY` — your project key

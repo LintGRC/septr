@@ -1,0 +1,13 @@
+# Septr's own source contains intentional attack payloads used to:
+#   - self-test adapters (src/adapters/*.ts verify blocks)
+#   - fire the `septr test` command (src/cli.ts payloads)
+#   - define detection patterns (src/core/sanitize.ts, ssrf.ts, etc.)
+#   - probe path catalog (septr-checks/probe-paths.json)
+# These are NOT vulnerabilities — excluding them is intentional.
+
+# Test files exercise the detectors with real attack payloads
+src/__tests__/
+test/
+
+# Probe-path catalog: URL paths that intentionally look like attack strings
+septr-checks/probe-paths.json
