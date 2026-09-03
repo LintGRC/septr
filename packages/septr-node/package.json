@@ -7,7 +7,7 @@
   "types": "./dist/core/index.d.ts",
   "repository": {
     "type": "git",
-    "url": "https://github.com/LintGRC/septr"
+    "url": "git+https://github.com/LintGRC/septr.git"
   },
   "homepage": "https://github.com/LintGRC/septr",
   "bugs": {

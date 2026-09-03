@@ -26,10 +26,10 @@ jobs:
           cache-dependency-path: packages/septr-node/package-lock.json
       - run: npm ci
       - run: npm run build
-      - name: Publish to npm
-        run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Publish to npm (OIDC trusted publishing)
+        run: |
+          unset NODE_AUTH_TOKEN
+          npm publish --provenance --access public
 
   publish-pypi:
     name: Publish to PyPI
