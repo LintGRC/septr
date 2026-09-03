@@ -13,6 +13,45 @@ const IGNORE_DIRS = new Set([
   ".turbo", ".nx",
 ])
 
+/** Test fixture payloads are intentionally malicious strings — never report
+ *  them as findings. Users can add their own entries to .septrignore. */
+const DEFAULT_IGNORE_PATTERNS = [
+  "**/__tests__/benchmark/**",
+  "**/*-payloads.ts",
+  "**/*-payloads.py",
+  "**/fixtures/**",
+]
+
+function readIgnoreFile(root: string): string[] {
+  try {
+    return readFileSync(join(root, ".septrignore"), "utf-8")
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l && !l.startsWith("#"))
+  } catch {
+    return []
+  }
+}
+
+function globToRegExp(pattern: string): RegExp {
+  let out = pattern
+    .split("**").join("\u0000")
+    .split("*").join("[^/]*")
+    .split("\u0000").join(".*")
+  out = out.replace(/\/$/, "(?:/.*)?$")
+  return new RegExp(`^${out}$`)
+}
+
+function isIgnored(rel: string, patterns: string[]): boolean {
+  const normalized = rel.split(sep).join("/")
+  for (const raw of patterns) {
+    const p = raw.startsWith("/") ? raw.slice(1) : raw
+    if (globToRegExp(p).test(normalized)) return true
+    if (globToRegExp(p + "/**").test(normalized)) return true
+  }
+  return false
+}
+
 /** Go module cache layout: parent dir `pkg` + entry `mod` at any depth —
  *  vendored dependency trees. The corpus studies showed private-key
  *  testdata under pkg/mod is pure false positives, so it is pruned the
@@ -43,6 +82,8 @@ export interface ScanFinding {
   description: string
   file: string
   preview: string
+  /** 1-based line number of the first match in the file, when known. */
+  line?: number
 }
 
 export interface Hygiene {
@@ -57,6 +98,7 @@ export interface ScanResult {
   findings: ScanFinding[]
   hygiene: Hygiene
   specifiers?: string[]
+  ignoredFiles: number
 }
 
 function redact(value: string): string {
@@ -64,7 +106,30 @@ function redact(value: string): string {
   return `${value.slice(0, 12)}…${value.length} chars`
 }
 
-function toFindings(events: DetectionEvent[], engine: string, file: string): ScanFinding[] {
+function lineOf(text: string, pattern: string): number | undefined {
+  let idx = text.indexOf(pattern)
+  if (idx < 0) {
+    // Match may come from the normalized (de-obfuscated) pass — e.g.
+    // URL-encoded or comment-split payloads — so the exact string is not
+    // in the raw file. Fall back to the first distinctive alphanumeric
+    // token (≥ 6 chars) so the user still gets a usable line.
+    const token = /[A-Za-z0-9_]{6,}/.exec(pattern)?.[0]
+    if (token) {
+      const lower = text.toLowerCase()
+      const tokenLower = token.toLowerCase()
+      const found = lower.indexOf(tokenLower)
+      if (found >= 0) idx = found
+    }
+  }
+  if (idx < 0) return undefined
+  let line = 1
+  for (let i = 0; i < idx; i++) {
+    if (text[i] === "\n") line += 1
+  }
+  return line
+}
+
+function toFindings(events: DetectionEvent[], engine: string, file: string, text: string): ScanFinding[] {
   return events.map((e) => ({
     patternId: e.patternId,
     engine,
@@ -72,19 +137,20 @@ function toFindings(events: DetectionEvent[], engine: string, file: string): Sca
     description: e.description,
     file,
     preview: redact(e.pattern || e.description || ""),
+    line: lineOf(text, e.pattern || ""),
   }))
 }
 
 export function scanFile(text: string, file: string): ScanFinding[] {
   const out: ScanFinding[] = []
-  out.push(...toFindings(detectSecrets(text), "secrets", file))
-  out.push(...toFindings(detectSQLi(text), "sanitize", file))
-  out.push(...toFindings(detectXSS(text), "sanitize", file))
-  out.push(...toFindings(detectSSRF(text), "ssrf", file))
+  out.push(...toFindings(detectSecrets(text), "secrets", file, text))
+  out.push(...toFindings(detectSQLi(text), "sanitize", file, text))
+  out.push(...toFindings(detectXSS(text), "sanitize", file, text))
+  out.push(...toFindings(detectSSRF(text), "ssrf", file, text))
   return out
 }
 
-export function scanDir(root: string): ScanResult {
+export function scanDir(root: string, extraIgnore: string[] = []): ScanResult {
   const findings: ScanFinding[] = []
   const hygiene: Hygiene = {
     gitignoreMissing: false,
@@ -93,9 +159,11 @@ export function scanDir(root: string): ScanResult {
     curlPipe: false,
   }
   let files = 0
+  let ignoredFiles = 0
   let rootGitignore = false
   const allSpecifiers: string[] = []
   const seenSpecs = new Set<string>()
+  const ignorePatterns = [...DEFAULT_IGNORE_PATTERNS, ...readIgnoreFile(root), ...extraIgnore]
 
   const walk = (dir: string): void => {
     let entries: string[]
@@ -119,13 +187,21 @@ export function scanDir(root: string): ScanResult {
       } catch {
         continue
       }
+      const rel = relative(root, full).split(sep).join("/")
       if (st.isDirectory()) {
         if (IGNORE_DIRS.has(entry)) continue
         if (isGoModCache(dir, entry)) continue
+        if (isIgnored(rel + "/", ignorePatterns)) {
+          ignoredFiles += 1
+          continue
+        }
         walk(full)
         continue
       }
-      const rel = relative(root, full)
+      if (isIgnored(rel, ignorePatterns)) {
+        ignoredFiles += 1
+        continue
+      }
       if (st.size > MAX_FILE_BYTES) {
         hygiene.giantFiles.push(rel)
         continue
@@ -154,13 +230,13 @@ export function scanDir(root: string): ScanResult {
 
   walk(root)
   hygiene.gitignoreMissing = !rootGitignore
-  return { files, findings, hygiene, specifiers: allSpecifiers }
+  return { files, findings, hygiene, specifiers: allSpecifiers, ignoredFiles }
 }
 
 /** Like scanDir, but also checks import specifiers against the npm registry
  *  for hallucinated packages. Returns a promise. */
-export async function scanDirAsync(root: string): Promise<ScanResult> {
-  const result = scanDir(root)
+export async function scanDirAsync(root: string, extraIgnore: string[] = []): Promise<ScanResult> {
+  const result = scanDir(root, extraIgnore)
   const hallucinated = await checkHallucinatedPackages(result.specifiers ?? [])
   for (const f of hallucinated) {
     f.file = "(import analysis)"

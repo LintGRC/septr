@@ -37,7 +37,8 @@ export function detectSSRF(input: string): DetectionEvent[] {
   for (const [regex, description] of SSRF_PATTERNS) {
     const pattern = new RegExp(regex.source, regex.flags)
 
-    if (pattern.test(input)) {
+    const match = pattern.exec(input)
+    if (match !== null) {
       const patternId = `ssrf_${description.split(" ")[0].toLowerCase()}`
 
       if (!seen.has(patternId)) {
@@ -49,6 +50,7 @@ export function detectSSRF(input: string): DetectionEvent[] {
           description,
           statusCode: 200,
           timestamp: Date.now(),
+          pattern: match[0],
         })
       }
     }

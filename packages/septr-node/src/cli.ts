@@ -91,6 +91,7 @@ function showHelp(): void {
   console.log("  --attach <project>    POST findings to the project (requires --api-key)")
   console.log("  --api-key <key>       project API key for --attach")
   console.log("  --api-url <url>       backend base URL for --attach (default https://api.septr.com)")
+  console.log("  --exclude <pattern>   skip matching paths (repeatable, gitignore-style globs)")
   console.log()
   console.log("Test/Audit options:")
   console.log("  --url       Your app's URL (default: http://localhost:3000)")
@@ -741,10 +742,11 @@ interface ScanOptions {
   attachProject: string | null
   apiKey: string | null
   apiUrl: string
+  exclude: string[]
 }
 
 function parseScanArgs(argv: string[]): ScanOptions {
-  const opts: ScanOptions = { target: ".", json: false, quiet: false, failOn: "high", timeoutMs: 3000, concurrency: 2, report: false, reportFile: null, attachProject: null, apiKey: null, apiUrl: "https://api.septr.com" }
+  const opts: ScanOptions = { target: ".", json: false, quiet: false, failOn: "high", timeoutMs: 3000, concurrency: 2, report: false, reportFile: null, attachProject: null, apiKey: null, apiUrl: "https://api.septr.com", exclude: [] }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === "--json") opts.json = true
@@ -752,6 +754,7 @@ function parseScanArgs(argv: string[]): ScanOptions {
     else if (a === "--fail-on" || a === "-f") opts.failOn = argv[++i] ?? "high"
     else if (a === "--timeout" || a === "-t") opts.timeoutMs = parseInt(argv[++i] ?? "3000", 10) || 3000
     else if (a === "--concurrency" || a === "-c") opts.concurrency = parseInt(argv[++i] ?? "2", 10) || 2
+    else if (a === "--exclude" || a === "-x") opts.exclude.push(argv[++i] ?? "")
     else if (a === "--report") opts.report = true
     else if (a === "--report-file") opts.reportFile = argv[++i] ?? ""
     else if (a === "--attach") opts.attachProject = argv[++i] ?? ""
@@ -780,7 +783,7 @@ function severityColor(sev: string): string {
 
 function printScanTable(findings: Array<ScanFinding | ProbeFinding>): void {
   for (const f of findings) {
-    const detail = "file" in f ? `${f.file}  ${f.preview}` : `${f.path} (${f.status})  ${f.preview}`
+    const detail = "file" in f ? `${f.file}${f.line ? `:${f.line}` : ""}  ${f.preview}` : `${f.path} (${f.status})  ${f.preview}`
     console.log(
       `${severityColor(f.severity)}  ${f.patternId.padEnd(28)} ${("engine" in f ? f.engine : "probe").padEnd(9)} ${detail}`,
     )
@@ -811,9 +814,9 @@ async function runScan(argv: string[]): Promise<void> {
     findings = [...result.findings, ...result.engineFindings]
     extra = { requests: result.requests, fingerprint: result.fingerprint, endpoints: result.endpoints }
   } else {
-    const result = await scanDirAsync(resolve(opts.target))
+    const result = await scanDirAsync(resolve(opts.target), opts.exclude)
     findings = result.findings
-    extra = { files: result.files, hygiene: result.hygiene }
+    extra = { files: result.files, hygiene: result.hygiene, ignored: result.ignoredFiles }
   }
 
   if (opts.report || opts.attachProject) {
@@ -934,7 +937,7 @@ async function runScan(argv: string[]): Promise<void> {
         console.log(`  endpoints: ${endpoints.length} discovered (e.g. ${endpoints.slice(0, 3).map((e) => e.path).join(", ")})`)
       }
     } else {
-      console.log(`septr scan: ${String(extra.files)} files, ${findings.length} finding(s)`)
+      console.log(`septr scan: ${String(extra.files)} files, ${findings.length} finding(s)${extra.ignored ? `, ${String(extra.ignored)} ignored` : ""}`)
       const hygiene = extra.hygiene as Record<string, unknown> | undefined
       if (hygiene?.gitignoreMissing) console.log("  hygiene: no root .gitignore (low)")
       if (hygiene?.envCommitted) console.log("  hygiene: committed .env file present (low — inspect contents)")

@@ -8,8 +8,16 @@ const SQLI_PATTERNS: [string, RegExp][] = [
   ["sqli_insert", /(\bINSERT\b\s+\bINTO\b)/i],
   ["sqli_delete", /(\bDELETE\b\s+\bFROM\b)/i],
   ["sqli_alter", /(\bALTER\b\s+\bTABLE\b)/i],
-  ["sqli_exec", /(\bEXEC\b|\bEXECUTE\b)\s*\(/i],
-  ["sqli_comment", /(--\s*$|\/\*[\s\S]*?\*\/)/],
+  // `EXEC(` is a SQL keyword, but `regex.exec(`, `fn.exec(` is a JS/Python
+  // method call — the most common false positive in Node codebases. Require a
+  // non-dot boundary so method calls are not flagged.
+  ["sqli_exec", /(?<!\.)\b(EXEC|EXECUTE)\s*\(/i],
+  // Comment injection: `admin'--` / `x'/*` — a quote-terminated string VALUE
+  // followed by a comment marker (preceding word char proves the quote ends
+  // a value, not a standalone quote). Bare `--`, `/* */`, or `"--flag"` in
+  // source code is a normal comment/string, NOT an injection. No newlines
+  // between the quote and marker — a doc comment on the next line is code.
+  ["sqli_comment", /([\w)\]])['"][ \t]*(--[^\n\r]*|\/\*[\s\S]*?\*\/)/],
   ["sqli_pg_sleep", /(\bPG_SLEEP\b\s*\()/i],
   ["sqli_waitfor", /(\bWAITFOR\b\s+\bDELAY\b)/i],
   ["sqli_benchmark", /(\bBENCHMARK\b\s*\()/i],
@@ -143,7 +151,8 @@ export function detectSQLi(input: string): DetectionEvent[] {
     for (const [id, regex] of SQLI_PATTERNS) {
       if (seen.has(id)) continue
       const pattern = new RegExp(regex.source, "g" + regex.flags.replace(/g/g, ""))
-      if (pattern.test(text)) {
+      const match = pattern.exec(text)
+      if (match !== null) {
         seen.add(id)
         events.push({
           type: "input_sanitize",
@@ -152,6 +161,7 @@ export function detectSQLi(input: string): DetectionEvent[] {
           description: `SQL injection pattern detected: ${id}`,
           statusCode: 400,
           timestamp: Date.now(),
+          pattern: match[0],
         })
       }
     }
@@ -178,6 +188,7 @@ export function detectXSS(input: string): DetectionEvent[] {
           description: `XSS vector detected: ${id}`,
           statusCode: 400,
           timestamp: Date.now(),
+          pattern: match[0],
         })
         match = pattern.exec(text)
       }
