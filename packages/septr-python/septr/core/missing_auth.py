@@ -22,6 +22,8 @@ def detect_missing_auth(
     path: str,
     method: str,
     auth_header: Optional[str] = None,
+    public_routes: Optional[list[str]] = None,
+    exact_routes: Optional[list[str]] = None,
 ) -> Optional[DetectionEvent]:
     normalized_path = path.lower()
 
@@ -31,7 +33,11 @@ def detect_missing_auth(
     if normalized_path.endswith(_STATIC_EXTENSIONS):
         return None
 
-    for public_route in PUBLIC_ROUTES:
+    for exact_route in exact_routes or []:
+        if normalized_path == exact_route.lower():
+            return None
+
+    for public_route in (public_routes or []) + PUBLIC_ROUTES:
         if normalized_path.startswith(public_route):
             return None
 

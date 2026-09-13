@@ -25,3 +25,19 @@ class TestMissingAuth:
     def test_skips_static_assets(self):
         assert detect_missing_auth("/static/main.js", "GET", None) is None
         assert detect_missing_auth("/app.css", "GET", None) is None
+
+    def test_skips_custom_public_routes(self):
+        assert detect_missing_auth("/", "GET", None, ["/"]) is None
+        assert detect_missing_auth("/api/v1/health", "GET", None, ["/api/v1/health"]) is None
+        assert detect_missing_auth("/api/v1/health", "GET", None, ["/api/v1"]) is None
+        assert detect_missing_auth("/api/private", "GET", None, ["/api/v1"]) is not None
+
+    def test_exact_routes_match_only_that_path(self):
+        assert detect_missing_auth("/", "GET", None, [], ["/"]) is None
+        assert detect_missing_auth("/api/private", "GET", None, [], ["/"]) is not None
+        assert detect_missing_auth("/track-record", "GET", None, [], ["/track-record"]) is None
+        assert detect_missing_auth("/track-record/extra", "GET", None, [], ["/track-record"]) is not None
+
+    def test_exact_routes_are_case_insensitive(self):
+        assert detect_missing_auth("/Track-Record", "GET", None, [], ["/track-record"]) is None
+        assert detect_missing_auth("/track-record", "GET", None, [], ["/TracK-Record"]) is None

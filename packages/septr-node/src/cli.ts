@@ -90,7 +90,7 @@ function showHelp(): void {
   console.log("  --report-file <path>  write a markdown assessment report")
   console.log("  --attach <project>    POST findings to the project (requires --api-key)")
   console.log("  --api-key <key>       project API key for --attach")
-  console.log("  --api-url <url>       backend base URL for --attach (default https://api.septr.com)")
+  console.log("  --api-url <url>       backend base URL for --attach (default https://app.septr.dev)")
   console.log("  --exclude <pattern>   skip matching paths (repeatable, gitignore-style globs)")
   console.log()
   console.log("Test/Audit options:")
@@ -746,7 +746,7 @@ interface ScanOptions {
 }
 
 function parseScanArgs(argv: string[]): ScanOptions {
-  const opts: ScanOptions = { target: ".", json: false, quiet: false, failOn: "high", timeoutMs: 3000, concurrency: 2, report: false, reportFile: null, attachProject: null, apiKey: null, apiUrl: "https://api.septr.com", exclude: [] }
+  const opts: ScanOptions = { target: ".", json: false, quiet: false, failOn: "high", timeoutMs: 3000, concurrency: 2, report: false, reportFile: null, attachProject: null, apiKey: null, apiUrl: "https://app.septr.dev", exclude: [] }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === "--json") opts.json = true
@@ -759,7 +759,7 @@ function parseScanArgs(argv: string[]): ScanOptions {
     else if (a === "--report-file") opts.reportFile = argv[++i] ?? ""
     else if (a === "--attach") opts.attachProject = argv[++i] ?? ""
     else if (a === "--api-key" || a === "-k") opts.apiKey = argv[++i] ?? ""
-    else if (a === "--api-url") opts.apiUrl = argv[++i] ?? "https://api.septr.com"
+    else if (a === "--api-url") opts.apiUrl = argv[++i] ?? "https://app.septr.dev"
     else if (a === "--help" || a === "-h") { showHelp(); process.exit(0) }
     else if (a === "--version" || a === "-v") { console.log("septr 0.1.0"); process.exit(0) }
     else if (!a.startsWith("-")) opts.target = a
@@ -965,6 +965,7 @@ async function sendResults(apiUrl: string, key: string, events: Array<{ event: s
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${key}`,
+        "User-Agent": "Septr-CLI/0.1.0",
       },
       body: JSON.stringify({ events, projectId: key }),
       signal: AbortSignal.timeout(5_000),

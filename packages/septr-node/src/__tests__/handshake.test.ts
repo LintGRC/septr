@@ -18,12 +18,12 @@ describe("sendHandshake", () => {
     })
     vi.stubGlobal("fetch", fetchMock)
 
-    const ok = await sendHandshake({ apiKey: KEY, telemetryUrl: "https://api.septr.com/v1/events", framework: "express" })
+    const ok = await sendHandshake({ apiKey: KEY, telemetryUrl: "https://app.septr.dev/v1/events", framework: "express" })
 
     expect(ok).toBe(true)
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
     const headers = init.headers as Record<string, string>
-    expect(url).toBe("https://api.septr.com/v1/handshake")
+    expect(url).toBe("https://app.septr.dev/v1/handshake")
     expect(headers.Authorization).toBe(`Bearer ${KEY}`)
     expect(JSON.parse(init.body as string)).toMatchObject({
       runtime: "express",

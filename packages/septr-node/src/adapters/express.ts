@@ -86,7 +86,7 @@ export function createSeptr(userConfig: SeptrConfig = {}): SeptrExpressMiddlewar
     ssrf: true,
     promptInjection: true,
     tamper: true,
-    telemetry: false,
+    telemetry: true,
     ...userConfig,
   }
 

@@ -17,10 +17,14 @@ Add your key to `.env`:
 SEPTR_API_KEY=septr_live_...
 ```
 
+Telemetry and auto-verification are **on by default** whenever
+`SEPTR_API_KEY` is set. Set `telemetry: false` to run detection only
+locally.
+
 ## Express
 
 ```js
-import { createSeptr } from "septr"
+import { createSeptr } from "septr/express"
 
 app.use(createSeptr({ apiKey: process.env.SEPTR_API_KEY }))
 ```
@@ -30,9 +34,9 @@ app.use(createSeptr({ apiKey: process.env.SEPTR_API_KEY }))
 Create `middleware.ts` (or `src/middleware.ts`) at the project root:
 
 ```ts
-import { createSeptr } from "septr"
+import { createSeptr } from "septr/nextjs"
 
-export default createSeptr({ apiKey: process.env.SEPTR_API_KEY })
+export const middleware = createSeptr({ apiKey: process.env.SEPTR_API_KEY })
 
 export const config = {
   matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
@@ -42,7 +46,7 @@ export const config = {
 ## Hono
 
 ```ts
-import { createSeptr } from "septr"
+import { createSeptr } from "septr/hono"
 
 app.use("*", createSeptr({ apiKey: process.env.SEPTR_API_KEY }))
 ```
@@ -50,7 +54,7 @@ app.use("*", createSeptr({ apiKey: process.env.SEPTR_API_KEY }))
 ## Fastify
 
 ```ts
-import { createSeptr } from "septr"
+import { createSeptr } from "septr/fastify"
 
 const shield = createSeptr({ apiKey: process.env.SEPTR_API_KEY })
 fastify.addHook("onRequest", shield.onRequest)
@@ -63,6 +67,9 @@ fastify.addHook("preSerialization", shield.preSerialization)
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `apiKey` | string | env `SEPTR_API_KEY` | Backend API key |
+| `telemetry` | boolean | `true` | Send detections to the dashboard |
+| `telemetryUrl` | string | `https://app.septr.dev/v1/events` | Telemetry endpoint |
+| `projectId` | string | derived from key | Project id; auto-read from `septr_live_*` keys |
 | `strictMode` | boolean | `false` | Block instead of detect |
 | `secrets` | boolean | `true` | Secret/PII detection + response scrubbing |
 | `bola` | boolean | `true` | BOLA/IDOR detection |
@@ -74,7 +81,6 @@ fastify.addHook("preSerialization", shield.preSerialization)
 | `tamper` | boolean | `true` | Business-logic tamper detection |
 | `missingAuth` | boolean | `true` | Missing-auth detection |
 | `stripFields` | string[] | `[]` | Fields to strip from responses |
-| `telemetryUrl` | string | `https://api.septr.com/v1/events` | Telemetry endpoint |
 | `remoteConfig` | boolean | `true` | Poll backend for live config |
 
 ## Source scanning (CLI)
@@ -93,6 +99,8 @@ Exclude paths with a committed `.septrignore` file (gitignore-style patterns) in
 - `SEPTR_SILENCE_ENV_WARNING` — set to `1` to silence the fail-loud
   missing-key warning
 - `SEPTR_REMOTE_CONFIG=false` — disable remote config polling
+
+Telemetry endpoint overrides go in config (`telemetryUrl`), not an env var.
 
 ## License
 

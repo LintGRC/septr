@@ -96,6 +96,10 @@ func (c *Config) defaultBool(p *bool, def bool) bool {
 	return *p
 }
 
+// Bool returns a pointer to v, for setting optional *bool Config fields
+// (e.g. Telemetry: septr.Bool(false) to disable telemetry).
+func Bool(v bool) *bool { return &v }
+
 func (c *Config) RemoteConfigEnabled() bool {
 	if c.RemoteConfig != nil && !*c.RemoteConfig {
 		return false
@@ -116,7 +120,7 @@ func (c *Config) PromptInjectionEnabled() bool { return c.defaultBool(c.PromptIn
 func (c *Config) MissingAuthEnabled() bool     { return c.defaultBool(c.MissingAuth, true) }
 func (c *Config) TamperEnabled() bool          { return c.defaultBool(c.Tamper, true) }
 func (c *Config) AIRateLimitEnabled() bool     { return c.defaultBool(c.AIRateLimit, true) }
-func (c *Config) TelemetryEnabled() bool       { return c.defaultBool(c.Telemetry, false) }
+func (c *Config) TelemetryEnabled() bool       { return c.defaultBool(c.Telemetry, true) }
 
 func nowMs() float64 {
 	return float64(time.Now().UnixNano()) / 1e6

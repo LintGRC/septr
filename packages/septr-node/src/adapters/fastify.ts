@@ -69,7 +69,7 @@ export function createSeptr(userConfig: SeptrConfig = {}) {
     ssrf: true,
     promptInjection: true,
     tamper: true,
-    telemetry: false,
+    telemetry: true,
     ...userConfig,
   }
 

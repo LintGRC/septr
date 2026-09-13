@@ -61,12 +61,12 @@ SEPTR_API_KEY=septr_live_...
 ```
 
 ```js
-import { createSeptr } from "septr"
+import { createSeptr } from "septr/express"
 
 app.use(createSeptr({ apiKey: process.env.SEPTR_API_KEY }))
 ```
 
-That's it. Septr verifies the connection on your app's first request and starts protecting every route.
+That's it. Septr verifies the connection on your app's first request and starts protecting every route. Telemetry is on by default (set `telemetry: false` to disable).
 
 ## Quick start (FastAPI)
 
@@ -76,15 +76,14 @@ pip install septr
 
 ```python
 from fastapi import FastAPI
-from septr.adapters.fastapi import SeptrASGIMiddleware
+from septr.adapters.fastapi import create_septr
 import os
 
 app = FastAPI()
 
-app.add_middleware(
-    SeptrASGIMiddleware,
-    api_key=os.getenv("SEPTR_API_KEY")
-)
+create_septr(app, {
+    "apiKey": os.getenv("SEPTR_API_KEY")
+})
 ```
 
 ## Detection engines
@@ -105,6 +104,7 @@ app.add_middleware(
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `apiKey` | string | env `SEPTR_API_KEY` | Your project API key |
+| `telemetry` | boolean | `true` | Send detections to the dashboard |
 | `strictMode` | boolean | `false` | Block requests instead of detecting |
 | `secrets` | boolean | `true` | Secret/PII detection + response scrubbing |
 | `bola` | boolean | `true` | BOLA/IDOR detection |
@@ -116,7 +116,8 @@ app.add_middleware(
 | `tamper` | boolean | `true` | Business-logic tamper detection |
 | `missingAuth` | boolean | `true` | Missing-auth detection |
 | `stripFields` | string[] | `[]` | Fields to strip from responses |
-| `telemetryUrl` | string | `https://api.septr.com/v1/events` | Telemetry endpoint |
+| `telemetryUrl` | string | `https://app.septr.dev/v1/events` | Telemetry endpoint |
+| `projectId` | string | derived from key | Project id; auto-read from `septr_live_*` keys |
 | `remoteConfig` | boolean | `true` | Poll backend for live config |
 
 ## Fail-open guarantee

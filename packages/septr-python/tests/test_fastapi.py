@@ -338,3 +338,32 @@ def test_missing_auth_suppressed_when_app_enforces_auth():
     status, events = _run_with_spy(mw, "POST", "/handshake")
     assert status == 401
     assert all(e.type != "missing_auth" for e in events)
+
+
+def test_public_routes_exact_matches_only_that_path():
+    mw = SeptrASGIMiddleware(OkApp(), {
+        **BASE_CONFIG,
+        "missingAuth": True,
+        "publicRoutesExact": ["/"],
+    })
+
+    status, events = _run_with_spy(mw, "GET", "/")
+    assert status == 200
+    assert all(e.type != "missing_auth" for e in events)
+
+    status, events = _run_with_spy(mw, "GET", "/private")
+    assert status == 200
+    assert any(e.type == "missing_auth" for e in events)
+
+
+def test_create_septr_attaches_single_middleware():
+    from fastapi import FastAPI
+
+    from septr.adapters.fastapi import create_septr
+
+    app = FastAPI()
+    returned = create_septr(app, {**BASE_CONFIG, "telemetry": False})
+
+    attached = [m for m in app.user_middleware if m.cls is SeptrASGIMiddleware]
+    assert len(attached) == 1
+    assert returned is app

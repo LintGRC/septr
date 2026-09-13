@@ -16,7 +16,7 @@ import threading
 import urllib.request
 from typing import Dict, Optional
 
-from .telemetry import project_id_from_key, telemetry_url_for
+from .telemetry import project_id_from_key, telemetry_url_for, user_agent
 
 DEFAULT_POLL_MS = 60_000
 
@@ -51,7 +51,10 @@ def fetch_project_config(config: dict) -> Optional[dict]:
     try:
         req = urllib.request.Request(
             url,
-            headers={"Authorization": f"Bearer {api_key}"},
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "User-Agent": user_agent(),
+            },
             method="GET",
         )
         with urllib.request.urlopen(req, timeout=5) as resp:

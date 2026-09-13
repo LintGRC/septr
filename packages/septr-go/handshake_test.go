@@ -70,10 +70,10 @@ func TestHandshakeURL(t *testing.T) {
 		telemetryURL string
 		want         string
 	}{
-		{"https://api.septr.com/v1/events", "https://api.septr.com/v1/handshake"},
+		{"https://app.septr.dev/v1/events", "https://app.septr.dev/v1/handshake"},
 		{"http://localhost:8000/v1/events", "http://localhost:8000/v1/handshake"},
 		{"http://localhost:8000/events", "http://localhost:8000/handshake"},
-		{"", "https://api.septr.com/v1/handshake"},
+		{"", "https://app.septr.dev/v1/handshake"},
 	}
 	for _, c := range cases {
 		config := &Config{TelemetryURL: c.telemetryURL}

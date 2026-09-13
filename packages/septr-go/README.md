@@ -8,7 +8,7 @@ with per-engine SOC 2 evidence for your dashboard.
 ## Install
 
 ```bash
-go get github.com/algebra4344/septr-go
+go get github.com/lintgrc/septr/packages/septr-go
 ```
 
 Add your key to `.env`:
@@ -17,13 +17,17 @@ Add your key to `.env`:
 SEPTR_API_KEY=septr_live_...
 ```
 
+Telemetry and auto-verification are **on by default** whenever
+`SEPTR_API_KEY` is set. Set `Telemetry` to `septr.Bool(false)` to run
+detection only locally.
+
 ## net/http
 
 ```go
 import (
     "net/http"
     "os"
-    septr "github.com/algebra4344/septr-go"
+    septr "github.com/lintgrc/septr/packages/septr-go"
 )
 
 shield := septr.NewNetHTTP(&septr.Config{
@@ -38,7 +42,7 @@ http.ListenAndServe(":8080", shield.Wrap(mux))
 import (
     "github.com/gin-gonic/gin"
     "os"
-    septr "github.com/algebra4344/septr-go"
+    septr "github.com/lintgrc/septr/packages/septr-go"
 )
 
 r := gin.Default()
@@ -52,6 +56,9 @@ r.Use(septr.NewGin(&septr.Config{
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `APIKey` | string | env `SEPTR_API_KEY` | Backend API key |
+| `Telemetry` | *bool | `true` | Send detections to the dashboard |
+| `TelemetryURL` | string | `https://app.septr.dev/v1/events` | Telemetry endpoint |
+| `ProjectID` | string | derived from key | Project id; auto-read from `septr_live_*` keys |
 | `StrictMode` | bool | `false` | Block instead of detect |
 | `Secrets` | *bool | `true` | Secret/PII detection + response scrubbing |
 | `BOLA` | *bool | `true` | BOLA/IDOR detection |
@@ -63,7 +70,6 @@ r.Use(septr.NewGin(&septr.Config{
 | `Tamper` | *bool | `true` | Business-logic tamper detection |
 | `AIRateLimit` | *bool | `true` | Rate limiting for AI endpoints |
 | `StripFields` | []string | `[]` | Fields to strip from responses |
-| `TelemetryURL` | string | `https://api.septr.com/v1/events` | Telemetry endpoint |
 
 ## Environment variables
 
@@ -71,6 +77,8 @@ r.Use(septr.NewGin(&septr.Config{
 - `SEPTR_SILENCE_ENV_WARNING` — set to `1` to silence the fail-loud
   missing-key warning
 - `SEPTR_REMOTE_CONFIG=false` — disable remote config polling
+
+Telemetry endpoint overrides go in config (`TelemetryURL`), not an env var.
 
 ## License
 

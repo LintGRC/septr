@@ -68,7 +68,7 @@ func initTelemetry(config *Config, projectID string) {
 func handshakeURL(config *Config) string {
 	url := config.TelemetryURL
 	if url == "" {
-		url = "https://api.septr.com/v1/events"
+		url = "https://app.septr.dev/v1/events"
 	}
 	if len(url) >= len("/events") && url[len(url)-len("/events"):] == "/events" {
 		url = url[:len(url)-len("/events")]
@@ -92,6 +92,8 @@ func sendHandshake(config *Config, apiKey string) bool {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
+	// Edge proxies (Cloudflare) reject default Go-http-client agents.
+	req.Header.Set("User-Agent", "Septr-SDK/"+sdkVersion)
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -209,7 +211,7 @@ func (t *TelemetryManager) Flush() {
 func (t *TelemetryManager) sendBatch(batch []DetectionEvent) error {
 	url := t.config.TelemetryURL
 	if url == "" {
-		url = "https://api.septr.com/v1/events"
+		url = "https://app.septr.dev/v1/events"
 	}
 
 	events := make([]map[string]interface{}, len(batch))

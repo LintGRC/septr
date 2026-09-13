@@ -212,3 +212,74 @@ def test_route_inventory_seeds_from_app_routes():
     # Self-test ping and static mounts are excluded.
     assert not any(r == "/__septr_ping" for (_, r, _) in seeded)
     assert not any(r.startswith("/static") for (_, r, _) in seeded)
+
+
+def test_handshake_sends_non_default_user_agent(monkeypatch):
+    """Edge proxies (Cloudflare) 403 the default Python-urllib agent — the
+    handshake must identify itself with a real User-Agent."""
+    import json
+    import urllib.request
+
+    from septr.core import telemetry
+
+    captured = {}
+
+    class FakeResponse:
+        status = 200
+
+        def read(self):
+            return json.dumps({"status": "connected"}).encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def fake_urlopen(req, timeout=None):
+        captured["ua"] = req.get_header("User-agent")
+        return FakeResponse()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    res = telemetry._handshake({
+        "apiKey": "septr_live_12345678-1234-1234-1234-123456789abc_" + "a" * 32,
+        "telemetry_url": "https://app.septr.dev/v1/events",
+        "framework": "fastapi",
+    })
+    assert res == {"status": "connected"}
+    assert captured["ua"], "handshake request had no User-Agent"
+    assert captured["ua"].startswith("Septr-SDK/")
+    assert "urllib" not in captured["ua"].lower()
+
+
+def test_config_pull_sends_non_default_user_agent(monkeypatch):
+    import json
+    import urllib.request
+
+    from septr.core import config_pull
+
+    captured = {}
+
+    class FakeResponse:
+        status = 200
+
+        def read(self):
+            return json.dumps({"config": {}}).encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def fake_urlopen(req, timeout=None):
+        captured["ua"] = req.get_header("User-agent")
+        return FakeResponse()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    assert config_pull.fetch_project_config({
+        "apiKey": "septr_live_x",
+        "telemetry_url": "https://app.septr.dev/v1/events",
+    }) == {}
+    assert captured["ua"], "config pull request had no User-Agent"
+    assert captured["ua"].startswith("Septr-SDK/")

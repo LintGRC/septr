@@ -13,7 +13,7 @@ const MAX_RETRY_INTERVAL_MS = 300_000
 const HANDSHAKE_PATH = "/handshake"
 
 function telemetryBaseUrl(config: SeptrConfig): string {
-  const url = config.telemetryUrl || "https://api.septr.com/v1/events"
+  const url = config.telemetryUrl || "https://app.septr.dev/v1/events"
   return url.endsWith("/events") ? url.slice(0, -"/events".length) : url
 }
 
@@ -28,6 +28,8 @@ export async function sendHandshake(config: SeptrConfig): Promise<boolean> {
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`,
+        // Edge proxies (Cloudflare) reject default/absent agents.
+        "User-Agent": `Septr-SDK/${PACKAGE_VERSION}`,
       },
       body: JSON.stringify({
         runtime: config.framework || "",
@@ -119,7 +121,7 @@ export class TelemetryManager {
   }
 
   private async sendBatch(batch: DetectionEvent[]): Promise<void> {
-    const url = this.config.telemetryUrl || "https://api.septr.com/v1/events"
+    const url = this.config.telemetryUrl || "https://app.septr.dev/v1/events"
 
     const payload: TelemetryPayload = {
       events: batch.map(({ timestamp: _, ...rest }) => rest),

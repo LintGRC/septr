@@ -103,7 +103,7 @@ export function createSeptr(userConfig: SeptrConfig = {}) {
     ssrf: true,
     promptInjection: true,
     tamper: true,
-    telemetry: false,
+    telemetry: true,
     ...userConfig,
   }
 
@@ -388,7 +388,7 @@ export function withSeptr(handler: (req: NextRequest) => Promise<NextResponse>, 
     ssrf: true,
     promptInjection: true,
     tamper: true,
-    telemetry: false,
+    telemetry: true,
     ...config,
   }
   const middleware = createSeptr(normalizedConfig)

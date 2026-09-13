@@ -40,7 +40,7 @@ func projectIDFromKey(apiKey string) string {
 func remoteConfigBaseURL(cfg *Config) string {
 	url := cfg.TelemetryURL
 	if url == "" {
-		url = "https://api.septr.com/v1/events"
+		url = "https://app.septr.dev/v1/events"
 	}
 	return strings.TrimSuffix(url, "/events")
 }
@@ -64,6 +64,8 @@ func FetchRemoteConfig(cfg *Config) map[string]interface{} {
 		return nil
 	}
 	req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
+	// Edge proxies (Cloudflare) reject default Go-http-client agents.
+	req.Header.Set("User-Agent", "Septr-SDK/"+sdkVersion)
 
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Do(req)

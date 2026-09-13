@@ -13,6 +13,10 @@ import type { SeptrConfig } from "./types"
 
 const DEFAULT_POLL_MS = 60_000
 
+// Edge proxies (Cloudflare) reject default/absent agents.
+const PACKAGE_VERSION: string =
+  typeof __SEPTR_VERSION__ === "undefined" ? "0.1.0" : __SEPTR_VERSION__
+
 const RUNTIME_KEYS = new Set<string>([
   "strictMode", "secrets", "bola", "rateLimit", "inputSanitize", "ssrf",
   "promptInjection", "missingAuth", "aiRateLimit", "aiEndpointShield",
@@ -31,7 +35,7 @@ export function configPullEnabled(config: SeptrConfig): boolean {
 }
 
 function baseUrl(config: SeptrConfig): string {
-  const url = (config.telemetryUrl as string) || "https://api.septr.com/v1/events"
+  const url = (config.telemetryUrl as string) || "https://app.septr.dev/v1/events"
   return url.endsWith("/events") ? url.slice(0, -"/events".length) : url
 }
 
@@ -50,7 +54,10 @@ export async function fetchProjectConfig(
   try {
     const response = await fetch(url, {
       method: "GET",
-      headers: { Authorization: `Bearer ${apiKey}` },
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "User-Agent": `Septr-SDK/${PACKAGE_VERSION}`,
+      },
       signal: AbortSignal.timeout(5_000),
     })
     if (!response.ok) return null

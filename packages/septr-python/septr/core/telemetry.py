@@ -47,6 +47,16 @@ def _package_version() -> str:
         return "0.1.0"
 
 
+def user_agent() -> str:
+    """User-Agent for every SDK HTTP call.
+
+    Edge proxies (Cloudflare) reject the default `Python-urllib/x.y` agent
+    with a 403, which would otherwise make handshakes and telemetry fail
+    silently in production.
+    """
+    return f"Septr-SDK/{_package_version()}"
+
+
 def _redact_path(path: str) -> str:
     if not path:
         return path
@@ -78,7 +88,7 @@ def telemetry_url_for(config: dict) -> str:
         or config.get("telemetryUrl")
         or os.environ.get("SEPTR_TELEMETRY_URL")
         or os.environ.get("VS_TELEMETRY_URL")
-        or "https://api.septr.com/v1/events"
+        or "https://app.septr.dev/v1/events"
     )
 
 
@@ -266,7 +276,7 @@ class TelemetryManager:
 
         headers = {
             "Content-Type": "application/json",
-            "User-Agent": f"Septr-Telemetry/{_package_version()}",
+            "User-Agent": user_agent(),
         }
         api_key = self.config.get("apiKey")
         if api_key:
@@ -348,6 +358,7 @@ def _handshake(config: dict) -> Optional[dict]:
             headers={
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {api_key}",
+                "User-Agent": user_agent(),
             },
             method="POST",
         )

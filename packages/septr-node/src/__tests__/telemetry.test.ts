@@ -65,7 +65,7 @@ describe("TelemetryManager", () => {
     manager.emit(makeEvent())
     await manager.flush()
     expect(fetch).toHaveBeenCalledWith(
-      "https://api.septr.com/v1/events",
+      "https://app.septr.dev/v1/events",
       expect.objectContaining({
         method: "POST",
         headers: expect.objectContaining({

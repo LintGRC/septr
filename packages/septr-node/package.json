@@ -1,6 +1,6 @@
 {
   "name": "septr",
-  "version": "0.1.22",
+  "version": "0.1.23",
   "description": "Security middleware + CLI for vibe-coded apps. Runtime protection, source scanning, and URL probing.",
   "type": "module",
   "main": "./dist/core/index.js",
@@ -15,18 +15,16 @@
   },
   "keywords": [
     "security",
-    "ai-security",
-    "vibe-coding",
-    "lovable",
-    "bolt",
-    "supabase",
     "middleware",
-    "static-analysis",
-    "secrets",
-    "ssrf",
-    "prompt-injection",
+    "scanner",
+    "ai",
+    "vibecode",
+    "express",
+    "nextjs",
     "bola",
-    "rls"
+    "idor",
+    "secrets",
+    "rate-limit"
   ],
   "author": "LintGRC",
   "license": "MIT",
@@ -72,20 +70,6 @@
     "test:watch": "vitest",
     "prepublishOnly": "npm run build"
   },
-  "keywords": [
-    "security",
-    "middleware",
-    "scanner",
-    "ai",
-    "vibecode",
-    "express",
-    "nextjs",
-    "bola",
-    "idor",
-    "secrets",
-    "rate-limit"
-  ],
-  "license": "MIT",
   "devDependencies": {
     "@types/express": "^5.0.6",
     "express": "^5.2.1",
