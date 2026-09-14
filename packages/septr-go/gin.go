@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math/rand"
 	"net/http"
 	"strings"
@@ -20,6 +21,7 @@ type GinMiddleware struct {
 	config         *Config
 	generalLimiter *SlidingWindowRateLimiter
 	authLimiter    *SlidingWindowRateLimiter
+	guard          *EngineGuard
 	selfTestEvent  *sync.WaitGroup
 	selfTestToken  string
 	selfTestDone   bool
@@ -54,11 +56,32 @@ func NewGin(config *Config) *GinMiddleware {
 	}
 	StartConfigPolling(config)
 	m.selfTestToken = fmt.Sprintf("vs_st_%08x", rand.Int63())
+	m.guard = NewEngineGuard(func(engine, reason string) {
+		emitEvent(degradedEvent(engine, reason), config)
+	})
 	return m
 }
 
 func (m *GinMiddleware) Handler() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// Emergency kill switch: bypass everything, keep the app untouched.
+		if killSwitchEngaged() {
+			c.Next()
+			return
+		}
+
+		appEntered := false
+		defer func() {
+			if r := recover(); r != nil {
+				if appEntered {
+					panic(r)
+				}
+				log.Printf("septr: recovered from middleware panic; failing open: %v", r)
+				appEntered = true
+				c.Next()
+			}
+		}()
+
 		path := c.Request.URL.Path
 		method := c.Request.Method
 		headers := c.Request.Header
@@ -106,13 +129,20 @@ func (m *GinMiddleware) Handler() gin.HandlerFunc {
 
 		needsResponseInspection := m.config.SecretsEnabled() || m.config.AIRateLimitEnabled() || m.config.TenantAware != nil
 		if needsResponseInspection {
-			iw := &ginInspectWriter{ResponseWriter: c.Writer, statusCode: http.StatusOK}
+			iw := &ginInspectWriter{
+				ResponseWriter: c.Writer,
+				statusCode:     http.StatusOK,
+				maxBytes:       m.config.ResponseScanMaxBytes(),
+				guard:          m.guard,
+			}
 			c.Writer = iw
+			appEntered = true
 			c.Next()
 			iw.finalize(m.config, path, method, headers)
 			return
 		}
 
+		appEntered = true
 		c.Next()
 	}
 }
@@ -122,6 +152,9 @@ type ginInspectWriter struct {
 	buf         bytes.Buffer
 	statusCode  int
 	wroteHeader bool
+	maxBytes    int
+	overflow    bool
+	guard       *EngineGuard
 }
 
 func (w *ginInspectWriter) WriteHeader(code int) {
@@ -132,20 +165,41 @@ func (w *ginInspectWriter) WriteHeader(code int) {
 	w.statusCode = code
 }
 
-func (w *ginInspectWriter) Write(b []byte) (int, error) {
+// overflowTo commits the status and streams the buffered bytes plus this
+// chunk straight to the client — responses over the scan cap are never held
+// in memory.
+func (w *ginInspectWriter) overflowTo(first []byte) (int, error) {
+	w.overflow = true
+	w.ResponseWriter.WriteHeader(w.statusCode)
+	if w.buf.Len() > 0 {
+		if _, err := w.ResponseWriter.Write(w.buf.Bytes()); err != nil {
+			return 0, err
+		}
+		w.buf.Reset()
+	}
+	return w.ResponseWriter.Write(first)
+}
+
+func (w *ginInspectWriter) write(b []byte) (int, error) {
 	if !w.wroteHeader {
 		w.wroteHeader = true
 		w.statusCode = http.StatusOK
+	}
+	if w.overflow {
+		return w.ResponseWriter.Write(b)
+	}
+	if w.maxBytes > 0 && w.buf.Len()+len(b) > w.maxBytes {
+		return w.overflowTo(b)
 	}
 	return w.buf.Write(b)
 }
 
+func (w *ginInspectWriter) Write(b []byte) (int, error) {
+	return w.write(b)
+}
+
 func (w *ginInspectWriter) WriteString(s string) (int, error) {
-	if !w.wroteHeader {
-		w.wroteHeader = true
-		w.statusCode = http.StatusOK
-	}
-	return w.buf.WriteString(s)
+	return w.write([]byte(s))
 }
 
 func (w *ginInspectWriter) WriteHeaderNow() {}
@@ -155,18 +209,30 @@ func (w *ginInspectWriter) Status() int { return w.statusCode }
 func (w *ginInspectWriter) Size() int { return w.buf.Len() }
 
 func (w *ginInspectWriter) finalize(config *Config, path, method string, headers http.Header) {
-	// Advisory: report responses missing standard security headers.
-	for _, d := range DetectMissingSecurityHeaders(w.Header()) {
-		emitEvent(d, config)
+	if w.overflow {
+		// Already streamed straight to the client.
+		return
 	}
-	if w.statusCode >= 200 && w.statusCode < 300 && w.buf.Len() > 0 {
+	// Advisory: report responses missing standard security headers.
+	if config.SecurityHeadersEnabled() {
+		for _, d := range Guarded(w.guard, "security_headers", []DetectionEvent{}, func() []DetectionEvent {
+			return DetectMissingSecurityHeaders(w.Header())
+		}) {
+			emitEvent(d, config)
+		}
+	}
+	if w.statusCode >= 200 && w.statusCode < 300 && w.buf.Len() > 0 && w.buf.Len() <= config.ResponseScanMaxBytes() {
 		ct := w.Header().Get("Content-Type")
 		isJSON := strings.Contains(ct, "application/json")
 
 		if config.AIRateLimitEnabled() {
-			aiEvents := detectAIRateLimit(w.buf.String(), path, method)
-			for _, d := range aiEvents {
-				emitEvent(d, config)
+			bodyStr := w.buf.String()
+			if hasRateLimitHint(bodyStr) {
+				for _, d := range Guarded(w.guard, "ai_rate_limit", []DetectionEvent{}, func() []DetectionEvent {
+					return detectAIRateLimit(bodyStr, path, method)
+				}) {
+					emitEvent(d, config)
+				}
 			}
 		}
 
@@ -176,18 +242,22 @@ func (w *ginInspectWriter) finalize(config *Config, path, method string, headers
 			if strings.HasPrefix(auth, "Bearer ") {
 				token = auth[7:]
 			}
-			claims := extractTokenClaims(token)
-			tenantID := extractTenantFromJwt(claims, config.TenantAware.JWTClaim)
+			var tenantID string
+			GuardedVoid(w.guard, "tenant_aware", func() {
+				claims := extractTokenClaims(token)
+				tenantID = extractTenantFromJwt(claims, config.TenantAware.JWTClaim)
+			})
 			if tenantID != "" {
 				var respBody interface{}
 				if err := json.Unmarshal(w.buf.Bytes(), &respBody); err == nil {
-					blocked, leaks := createTenantCheckResponse(tenantID, respBody, *config.TenantAware)
+					tc := guardedTenantCheck(w.guard, tenantID, respBody, *config.TenantAware)
+					blocked, leaks := tc.Blocked, tc.Leaks
 					for _, leak := range leaks {
 						emitEvent(DetectionEvent{
 							Type: "cross_tenant_leak", Severity: "critical",
-							PatternID: "cross_tenant_mismatch",
+							PatternID:   "cross_tenant_mismatch",
 							Description: "Cross-tenant data leak at " + leak.Path + " — value does not match tenant " + tenantID,
-							Route: path, Method: method, Timestamp: nowMs(),
+							Route:       path, Method: method, Timestamp: nowMs(),
 						}, config)
 					}
 					if blocked {
@@ -204,7 +274,8 @@ func (w *ginInspectWriter) finalize(config *Config, path, method string, headers
 		if config.SecretsEnabled() && isJSON {
 			var bodyData interface{}
 			if err := json.Unmarshal(w.buf.Bytes(), &bodyData); err == nil {
-				cleaned, stripDets := stripSensitiveData(bodyData, config.StripFields)
+				stripped := guardedStrip(w.guard, bodyData, config.StripFields)
+				cleaned, stripDets := stripped.Body, stripped.Dets
 				if len(stripDets) > 0 {
 					for _, d := range stripDets {
 						emitEvent(d, config)
@@ -244,13 +315,16 @@ func (m *GinMiddleware) runPipeline(w http.ResponseWriter, r *http.Request, path
 			limiter = m.authLimiter
 		}
 		if limiter != nil {
-			allowed, _, _ := limiter.Check(ip)
+			allowed := Guarded(m.guard, "rate_limit", true, func() bool {
+				ok, _, _ := limiter.Check(ip)
+				return ok
+			})
 			if !allowed {
 				emitEvent(DetectionEvent{
 					Type: "rate_limit", Severity: "medium",
-					PatternID: "rate_limit_exceeded",
+					PatternID:   "rate_limit_exceeded",
 					Description: "Rate limit exceeded for " + path,
-					Route: path, Method: method, Timestamp: nowMs(),
+					Route:       path, Method: method, Timestamp: nowMs(),
 				}, m.config)
 				return &pipelineEvent{statusCode: 429}
 			}
@@ -262,17 +336,38 @@ func (m *GinMiddleware) runPipeline(w http.ResponseWriter, r *http.Request, path
 	var bodyMap map[string]interface{}
 	needsBody := m.config.InputSanitizeEnabled() || m.config.TamperEnabled() || m.config.SSRFEnabled() || m.config.PromptInjectionEnabled()
 	if needsBody && (method == "POST" || method == "PUT" || method == "PATCH" || method == "DELETE") {
-		bodyBytes, _ = io.ReadAll(r.Body)
-		r.Body.Close()
-		if len(bodyBytes) > 0 {
-			json.Unmarshal(bodyBytes, &bodyMap)
+		maxInspect := int64(m.config.RequestInspectMaxBytes())
+		switch {
+		case r.ContentLength > maxInspect:
+			// Too large to inspect: leave the body untouched for the app.
+		case r.ContentLength >= 0:
+			bodyBytes, _ = io.ReadAll(r.Body)
+			r.Body.Close()
+			if len(bodyBytes) > 0 {
+				json.Unmarshal(bodyBytes, &bodyMap)
+			}
+			r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+		default:
+			// Unknown length (chunked): inspect a prefix, stream the rest.
+			prefix, _ := io.ReadAll(io.LimitReader(r.Body, maxInspect+1))
+			if int64(len(prefix)) <= maxInspect {
+				bodyBytes = prefix
+			} else {
+				bodyBytes = prefix[:maxInspect]
+			}
+			if len(bodyBytes) > 0 {
+				json.Unmarshal(bodyBytes, &bodyMap)
+			}
+			r.Body = io.NopCloser(io.MultiReader(bytes.NewReader(prefix), r.Body))
 		}
-		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 	}
 
 	// Phase 3: Tamper
 	if m.config.TamperEnabled() && bodyMap != nil {
-		tamperEvents := detectBusinessLogicTamper(bodyMap, m.config.FieldConstraints, path, method)
+		var tamperEvents []DetectionEvent
+		GuardedVoid(m.guard, "tamper", func() {
+			tamperEvents = detectBusinessLogicTamper(bodyMap, m.config.FieldConstraints, path, method)
+		})
 		for _, d := range tamperEvents {
 			emitEvent(d, m.config)
 		}
@@ -284,7 +379,13 @@ func (m *GinMiddleware) runPipeline(w http.ResponseWriter, r *http.Request, path
 	// Phase 4: Input sanitize
 	if m.config.InputSanitizeEnabled() {
 		if bodyMap != nil {
-			if block, sanitizeDets := sanitizeInput(bodyMap, 0); block {
+			var sanitizeDets []DetectionEvent
+			block := Guarded(m.guard, "input_sanitize", false, func() bool {
+				b, dets := sanitizeInput(bodyMap, 0)
+				sanitizeDets = dets
+				return b
+			})
+			if block {
 				for _, d := range sanitizeDets {
 					emitEvent(d, m.config)
 				}
@@ -303,7 +404,11 @@ func (m *GinMiddleware) runPipeline(w http.ResponseWriter, r *http.Request, path
 			}
 		}
 		if len(queryMap) > 0 {
-			if _, qd := sanitizeQuery(queryMap); len(qd) > 0 {
+			var qd []DetectionEvent
+			GuardedVoid(m.guard, "input_sanitize", func() {
+				_, qd = sanitizeQuery(queryMap)
+			})
+			if len(qd) > 0 {
 				for _, d := range qd {
 					emitEvent(d, m.config)
 				}
@@ -323,7 +428,10 @@ func (m *GinMiddleware) runPipeline(w http.ResponseWriter, r *http.Request, path
 		if len(bodyBytes) > 0 {
 			ssrfInput += " " + string(bodyBytes)
 		}
-		ssrfEvents := detectSSRF(ssrfInput)
+		var ssrfEvents []DetectionEvent
+		GuardedVoid(m.guard, "ssrf", func() {
+			ssrfEvents = detectSSRF(ssrfInput)
+		})
 		for _, d := range ssrfEvents {
 			emitEvent(d, m.config)
 		}
@@ -338,7 +446,10 @@ func (m *GinMiddleware) runPipeline(w http.ResponseWriter, r *http.Request, path
 		if len(bodyBytes) > 0 {
 			piInput += " " + string(bodyBytes)
 		}
-		piEvents := detectPromptInjection(piInput)
+		var piEvents []DetectionEvent
+		GuardedVoid(m.guard, "prompt_injection", func() {
+			piEvents = detectPromptInjection(piInput)
+		})
 		for _, d := range piEvents {
 			emitEvent(d, m.config)
 		}
@@ -354,18 +465,22 @@ func (m *GinMiddleware) runPipeline(w http.ResponseWriter, r *http.Request, path
 		if strings.HasPrefix(auth, "Bearer ") {
 			token = auth[7:]
 		}
-		tokenClaims := extractTokenClaims(token)
-		template := routeTemplate
-		routeParams := extractRouteParams(path)
-		routeParamValues := map[string]string{}
-		routeForEvent := path
-		if template != "" {
-			routeParams = extractRouteParams(template)
-			routeParamValues = ExtractRouteParamValues(template, path)
-			routeForEvent = template
-		}
-		if ev := detectBOLA(routeParams, nil, tokenClaims, routeForEvent, method, routeParamValues); ev != nil {
-			emitEvent(*ev, m.config)
+		var bolaEvent *DetectionEvent
+		GuardedVoid(m.guard, "bola", func() {
+			tokenClaims := extractTokenClaims(token)
+			template := routeTemplate
+			routeParams := extractRouteParams(path)
+			routeParamValues := map[string]string{}
+			routeForEvent := path
+			if template != "" {
+				routeParams = extractRouteParams(template)
+				routeParamValues = ExtractRouteParamValues(template, path)
+				routeForEvent = template
+			}
+			bolaEvent = detectBOLA(routeParams, nil, tokenClaims, routeForEvent, method, routeParamValues)
+		})
+		if bolaEvent != nil {
+			emitEvent(*bolaEvent, m.config)
 			if m.config.StrictMode {
 				return &pipelineEvent{statusCode: 404}
 			}
@@ -375,8 +490,12 @@ func (m *GinMiddleware) runPipeline(w http.ResponseWriter, r *http.Request, path
 	// Phase 8: Missing auth (advisory)
 	if m.config.MissingAuthEnabled() {
 		authHeader := headers.Get("authorization")
-		if ev := detectMissingAuth(path, method, authHeader); ev != nil {
-			emitEvent(*ev, m.config)
+		var maEvent *DetectionEvent
+		GuardedVoid(m.guard, "missing_auth", func() {
+			maEvent = detectMissingAuth(path, method, authHeader)
+		})
+		if maEvent != nil {
+			emitEvent(*maEvent, m.config)
 		}
 	}
 

@@ -23,7 +23,7 @@ func netHTTPStatus(t *testing.T, url, method string) int {
 
 func TestNetHTTP_AuthRouteGetUsesGeneralLimiter(t *testing.T) {
 	m := NewNetHTTP(&Config{
-		RateLimit:      boolPtr(true),
+		RateLimit:       boolPtr(true),
 		RateLimitConfig: &RateLimitConfig{Max: 2, WindowMs: 60000},
 	})
 	ts := httptest.NewServer(m.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -45,7 +45,7 @@ func TestNetHTTP_AuthRouteGetUsesGeneralLimiter(t *testing.T) {
 
 func TestNetHTTP_AuthRoutePostKeepsStrictAuthLimiter(t *testing.T) {
 	m := NewNetHTTP(&Config{
-		RateLimit:      boolPtr(true),
+		RateLimit:       boolPtr(true),
 		RateLimitConfig: &RateLimitConfig{Max: 100, WindowMs: 60000},
 	})
 	ts := httptest.NewServer(m.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

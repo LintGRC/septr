@@ -12,9 +12,10 @@ import { detectSSRF } from "../core/ssrf"
 import { detectPromptInjection } from "../core/prompt-injection"
 import { detectMissingAuth } from "../core/missing-auth"
 import { detectBusinessLogicTamper } from "../core/tamper"
-import { detectAIRateLimit } from "../core/ai-rate-limit"
-import { extractTenantFromJwt, detectCrossTenantLeaks } from "../core/tenant-aware"
+import { detectAIRateLimit, hasRateLimitHint } from "../core/ai-rate-limit"
+import { extractTenantFromJwt, detectCrossTenantLeaks, type TenantLeak } from "../core/tenant-aware"
 import { scheduleStartupSelfTest } from "../core/self-test"
+import { EngineGuard, killSwitchEngaged } from "../core/safety"
 
 type FastifyRequest = {
   method: string
@@ -91,11 +92,27 @@ export function createSeptr(userConfig: SeptrConfig = {}) {
   }
   startConfigPolling(config)
 
+  const guard = new EngineGuard({
+    failureThreshold: config.engineFailureThreshold,
+    budgetMs: config.engineBudgetMs,
+    onDegraded: (engine, reason) => {
+      emitEvent({
+        type: "system",
+        severity: "info",
+        patternId: "engine_degraded",
+        description: `Engine \`${engine}\` degraded and was disabled for this process (${reason}). Restart the app to retry, or upgrade the Septr SDK.`,
+        timestamp: Date.now(),
+      }, config)
+    },
+  })
+
   let selfTestResolve: (() => void) | null = null
   const selfTestToken = `vs_st_${Math.random().toString(36).slice(2, 10)}`
 
   return {
     onRequest: async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+      if (killSwitchEngaged(config)) return
+      await (async (): Promise<void> => {
       if (request.url === "/__septr_ping" && request.headers["x-septr-self-test"] === selfTestToken) {
         selfTestResolve?.()
         selfTestResolve = null
@@ -193,7 +210,7 @@ export function createSeptr(userConfig: SeptrConfig = {}) {
       if (request.query) piInputs.push(JSON.stringify(request.query))
       const piInput = piInputs.join(" ")
       if (piInput) {
-        const piEvents = detectPromptInjection(piInput)
+        const piEvents = guard.run("prompt_injection", () => detectPromptInjection(piInput), [] as DetectionEvent[])
         for (const d of piEvents) {
           detections.push(d)
           emitEvent(d, config)
@@ -229,11 +246,14 @@ export function createSeptr(userConfig: SeptrConfig = {}) {
         }
       }
     }
+    })().catch((err) => console.error("[septr] middleware error; failing open", err))
     },
 
     /** Runs body-dependent engines (input sanitize, tamper, SSRF, prompt
      * injection) after Fastify has parsed the request body (preHandler phase). */
     preHandler: async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+      if (killSwitchEngaged(config)) return
+      await (async (): Promise<void> => {
       const detections: DetectionEvent[] = []
 
       if (config.inputSanitize) {
@@ -268,7 +288,7 @@ export function createSeptr(userConfig: SeptrConfig = {}) {
         else if (request.body && typeof request.body === "object") ssrfInputs.push(JSON.stringify(request.body))
         const ssrfInput = ssrfInputs.join(" ")
         if (ssrfInput) {
-          const ssrfEvents = detectSSRF(ssrfInput)
+          const ssrfEvents = guard.run("ssrf", () => detectSSRF(ssrfInput), [] as DetectionEvent[])
           for (const d of ssrfEvents) {
             detections.push(d)
             emitEvent(d, config)
@@ -287,7 +307,7 @@ export function createSeptr(userConfig: SeptrConfig = {}) {
         else if (request.body && typeof request.body === "object") piInputs.push(JSON.stringify(request.body))
         const piInput = piInputs.join(" ")
         if (piInput) {
-          const piEvents = detectPromptInjection(piInput)
+          const piEvents = guard.run("prompt_injection", () => detectPromptInjection(piInput), [] as DetectionEvent[])
           for (const d of piEvents) {
             detections.push(d)
             emitEvent(d, config)
@@ -299,20 +319,25 @@ export function createSeptr(userConfig: SeptrConfig = {}) {
           }
         }
       }
+    })().catch((err) => console.error("[septr] middleware error; failing open", err))
     },
 
     preSerialization: (request: FastifyRequest, reply: FastifyReply, payload: PreSerializationPayload, done: (err?: Error | null, newPayload?: unknown) => void): void => {
+      if (killSwitchEngaged(config)) {
+        done(null, payload)
+        return
+      }
       try {
         // Advisory: report responses missing standard security headers.
         if (typeof reply.getHeaders === "function") {
-          for (const d of detectMissingSecurityHeaders(reply.getHeaders() as Record<string, string>)) {
+          for (const d of config.securityHeaders === false ? [] : detectMissingSecurityHeaders(reply.getHeaders() as Record<string, string>)) {
             emitEvent(d, config)
           }
         }
         const tenantId = (request as any).__vs_tenant_id
         const taConfig = (request as any).__vs_tenant_config
         if (tenantId && taConfig && payload) {
-          const leaks = detectCrossTenantLeaks(tenantId, payload, taConfig.tenantColumn)
+          const leaks = guard.run("tenant_aware", () => detectCrossTenantLeaks(tenantId, payload, taConfig.tenantColumn), [] as TenantLeak[])
           if (leaks.length > 0) {
             const ctEvent: DetectionEvent = {
               type: "cross_tenant_leak",
@@ -348,13 +373,14 @@ export function createSeptr(userConfig: SeptrConfig = {}) {
         }
 
         const serialized = typeof payload === "string" ? payload : JSON.stringify(payload)
-        if (serialized.length > 1_000_000) {
+        const maxInspect = config.maxResponseScanBytes && config.maxResponseScanBytes > 0 ? config.maxResponseScanBytes : 1_000_000
+        if (serialized.length > maxInspect) {
           done(null, payload)
           return
         }
 
-        if (config.aiRateLimit) {
-          const aiEvents = detectAIRateLimit(serialized, request.url, request.method)
+        if (config.aiRateLimit && hasRateLimitHint(serialized)) {
+          const aiEvents = guard.run("ai_rate_limit", () => detectAIRateLimit(serialized, request.url, request.method), [] as DetectionEvent[])
           for (const d of aiEvents) emitEvent(d, config)
         }
 
@@ -363,7 +389,7 @@ export function createSeptr(userConfig: SeptrConfig = {}) {
           return
         }
 
-        const { cleaned, detections: stripDetections } = stripSensitiveData(payload, config.stripFields)
+        const { cleaned, detections: stripDetections } = guard.run("secrets", () => stripSensitiveData(payload, config.stripFields), { cleaned: payload, detections: [] as DetectionEvent[] })
         if (request.url !== "/__septr_ping") {
           for (const d of stripDetections) emitEvent(d, config)
         }

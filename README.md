@@ -116,13 +116,36 @@ create_septr(app, {
 | `tamper` | boolean | `true` | Business-logic tamper detection |
 | `missingAuth` | boolean | `true` | Missing-auth detection |
 | `stripFields` | string[] | `[]` | Fields to strip from responses |
+| `maxResponseScanBytes` | number | `1000000` | Max response size scanned (chars); larger responses stream through unscanned |
+| `maxRequestInspectBytes` | number | `256000` | Max request body inspected (chars); larger bodies stream through untouched |
+| `engineFailureThreshold` | number | `3` | Consecutive engine failures before the breaker skips that engine |
+| `engineBudgetMs` | number | `50` | Per-engine time budget; slower calls count as failures |
+| `disabled` | boolean | `false` | Emergency bypass — pass every request through untouched |
+| `securityHeaders` | boolean | `true` | Report responses missing security headers (disable when an app middleware or edge proxy manages them) |
 | `telemetryUrl` | string | `https://app.septr.dev/v1/events` | Telemetry endpoint |
 | `projectId` | string | derived from key | Project id; auto-read from `septr_live_*` keys |
 | `remoteConfig` | boolean | `true` | Poll backend for live config |
 
-## Fail-open guarantee
+## Safety guarantees
 
-If Septr ever throws, it logs the error and passes the request through. Your app never goes down because of its bodyguard.
+Septr is built so it can never break or measurably slow the host app:
+
+- **Fail-open everywhere.** Every detection engine runs behind a guard that
+  catches errors, and each adapter wraps its whole pipeline: any unexpected
+  failure logs and passes the request through untouched. Exceptions raised by
+  *your* app are always re-raised, never swallowed.
+- **Bounded work.** Request inspection and response scanning are size-capped
+  (`maxRequestInspectBytes`, `maxResponseScanBytes`, both 256 KB by default).
+  Larger payloads stream straight through without being buffered or scanned.
+- **Circuit breaker.** After `engineFailureThreshold` consecutive failures
+  (or calls slower than `engineBudgetMs`), that engine is skipped for the
+  process and reported once to the dashboard as a `engine_degraded` event —
+  you see "upgrade the SDK", not a silent loss of protection.
+- **No request-path network I/O.** Telemetry is buffered and flushed on a
+  background worker; a slow or unreachable Septr backend never delays traffic.
+- **Emergency kill switch.** Set `SEPTR_DISABLED=true` (env) or
+  `disabled: true` (config) to bypass all scanning instantly without
+  uninstalling — flip it back when you're ready.
 
 ## Repo layout
 

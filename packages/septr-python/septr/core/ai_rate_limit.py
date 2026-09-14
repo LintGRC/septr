@@ -42,6 +42,18 @@ PATTERNS: list[dict] = [
 ]
 
 
+def has_rate_limit_hint(body: str) -> bool:
+    """Cheap substring prefilter so the full pattern set only runs when the
+    body could plausibly contain a rate-limit/quota message.
+
+    Response bodies can be large app payloads; running six case-insensitive
+    regexes over every response is wasted work when the text contains none of
+    the literal markers our patterns require. One lowercase pass + three
+    substring checks is fast C-level work."""
+    lowered = body.lower()
+    return "429" in lowered or "rate" in lowered or "quota" in lowered
+
+
 def detect_ai_rate_limit(
     body: str,
     route: Optional[str] = None,

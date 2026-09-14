@@ -9,8 +9,9 @@ import { detectSSRF } from "../core/ssrf"
 import { detectPromptInjection } from "../core/prompt-injection"
 import { detectMissingAuth } from "../core/missing-auth"
 import { detectBusinessLogicTamper } from "../core/tamper"
-import { detectAIRateLimit } from "../core/ai-rate-limit"
+import { detectAIRateLimit, hasRateLimitHint } from "../core/ai-rate-limit"
 import { runEngineSelfTest } from "../core/self-test"
+import { EngineGuard, killSwitchEngaged } from "../core/safety"
 type NextRequest = {
   nextUrl: { pathname: string; searchParams: URLSearchParams }
   headers: Headers
@@ -109,9 +110,25 @@ export function createSeptr(userConfig: SeptrConfig = {}) {
 
   const rateLimiter = config.rateLimit ? createRateLimiter(config) : null
 
+  const guard = new EngineGuard({
+    failureThreshold: config.engineFailureThreshold,
+    budgetMs: config.engineBudgetMs,
+    onDegraded: (engine, reason) => {
+      emitEvent({
+        type: "system",
+        severity: "info",
+        patternId: "engine_degraded",
+        description: `Engine \`${engine}\` degraded and was disabled for this process (${reason}). Restart the app to retry, or upgrade the Septr SDK.`,
+        timestamp: Date.now(),
+      }, config)
+    },
+  })
+
   let selfTestDone = false
 
   return async function vibeShieldMiddleware(request: NextRequest): Promise<NextMiddlewareResult> {
+    if (killSwitchEngaged(config)) return
+    return await (async (): Promise<NextMiddlewareResult> => {
     if (!selfTestDone && config.selfTest !== false) {
       selfTestDone = true
       const engineResults = runEngineSelfTest()
@@ -191,7 +208,7 @@ export function createSeptr(userConfig: SeptrConfig = {}) {
       let qd: ReturnType<typeof sanitizeQuery>["detections"] = []
       let block = false
       if (request.nextUrl.searchParams.size > 0) {
-        const r = sanitizeQuery(query)
+        const r = guard.run("input_sanitize", () => sanitizeQuery(query), { block: false, detections: [] as DetectionEvent[] })
         qd = r.detections
         block = r.block
       }
@@ -199,7 +216,7 @@ export function createSeptr(userConfig: SeptrConfig = {}) {
       if (requestBodyText && ["POST", "PUT", "PATCH", "DELETE"].includes(request.method)) {
         try {
           const parsed = JSON.parse(requestBodyText)
-          const r = sanitizeInput(parsed)
+          const r = guard.run("input_sanitize", () => sanitizeInput(parsed), { block: false, detections: [] as DetectionEvent[] })
           bd = r.detections
           block = block || r.block
         } catch { /* body not JSON */ }
@@ -229,7 +246,7 @@ export function createSeptr(userConfig: SeptrConfig = {}) {
       const routeParams = template ? extractRouteParams(template) : extractRouteParams(pathname)
       const routeParamValues = template ? extractRouteParamValues(template, pathname) : undefined
 
-      const bolaEvent = detectBOLA(routeParams, null, tokenClaims, routeForEvent, request.method, routeParamValues)
+      const bolaEvent = guard.run("bola", () => detectBOLA(routeParams, null, tokenClaims, routeForEvent, request.method, routeParamValues), null)
       if (bolaEvent) {
         detections.push(bolaEvent)
         if (config.strictMode) {
@@ -258,7 +275,7 @@ export function createSeptr(userConfig: SeptrConfig = {}) {
     }
     const ssrfInput = ssrfInputs.join(" ")
     if (ssrfInput) {
-      const ssrfEvents = detectSSRF(ssrfInput)
+      const ssrfEvents = guard.run("ssrf", () => detectSSRF(ssrfInput), [] as DetectionEvent[])
       for (const d of ssrfEvents) {
         detections.push(d)
         if (config.apiKey && config.telemetry !== false) {
@@ -291,7 +308,7 @@ export function createSeptr(userConfig: SeptrConfig = {}) {
       }
     }
     if (piInput) {
-      const piEvents = detectPromptInjection(piInput)
+      const piEvents = guard.run("prompt_injection", () => detectPromptInjection(piInput), [] as DetectionEvent[])
       for (const d of piEvents) {
         detections.push(d)
         if (config.apiKey && config.telemetry !== false) {
@@ -375,6 +392,10 @@ export function createSeptr(userConfig: SeptrConfig = {}) {
     }
 
     return
+    })().catch((err) => {
+      console.error("[septr] middleware error; failing open", err)
+      return undefined
+    })
   }
 }
 
@@ -393,33 +414,58 @@ export function withSeptr(handler: (req: NextRequest) => Promise<NextResponse>, 
   }
   const middleware = createSeptr(normalizedConfig)
 
+  const guard = new EngineGuard({
+    failureThreshold: normalizedConfig.engineFailureThreshold,
+    budgetMs: normalizedConfig.engineBudgetMs,
+    onDegraded: (engine, reason) => {
+      emitEvent({
+        type: "system",
+        severity: "info",
+        patternId: "engine_degraded",
+        description: `Engine \`${engine}\` degraded and was disabled for this process (${reason}). Restart the app to retry, or upgrade the Septr SDK.`,
+        timestamp: Date.now(),
+      }, normalizedConfig)
+    },
+  })
+
   return async function protectedHandler(request: NextRequest): Promise<NextResponse> {
+    if (killSwitchEngaged(normalizedConfig)) {
+      return handler(request)
+    }
     const result = await middleware(request)
     if (result) return result as NextResponse
 
     const response = await handler(request)
 
     // Advisory: report responses missing standard security headers.
-    for (const d of detectMissingSecurityHeaders(response.headers)) {
-      emitEvent(d, normalizedConfig)
+    if (normalizedConfig.securityHeaders !== false) {
+      for (const d of guard.run("security_headers", () => detectMissingSecurityHeaders(response.headers), [] as DetectionEvent[])) {
+        emitEvent(d, normalizedConfig)
+      }
     }
 
     if (normalizedConfig.secrets || normalizedConfig.aiRateLimit) {
       try {
         const contentLength = Number(response.headers.get("content-length") || 0)
-        if (contentLength > 1_000_000) {
+        const maxInspect = normalizedConfig.maxResponseScanBytes && normalizedConfig.maxResponseScanBytes > 0
+          ? normalizedConfig.maxResponseScanBytes
+          : 1_000_000
+        if (contentLength > maxInspect) {
           return response
         }
         const body = await (response.json as () => Promise<unknown>)()
 
         if (normalizedConfig.aiRateLimit) {
-          const aiEvents = detectAIRateLimit(JSON.stringify(body), request.nextUrl.pathname, request.method)
+          const serialized = JSON.stringify(body)
+          const aiEvents = hasRateLimitHint(serialized)
+            ? guard.run("ai_rate_limit", () => detectAIRateLimit(serialized, request.nextUrl.pathname, request.method), [] as DetectionEvent[])
+            : []
           for (const d of aiEvents) emitEvent(d, normalizedConfig)
         }
 
         if (!normalizedConfig.secrets) return response
 
-        const { cleaned, detections } = stripSensitiveData(body, normalizedConfig.stripFields)
+        const { cleaned, detections } = guard.run("secrets", () => stripSensitiveData(body, normalizedConfig.stripFields), { cleaned: body, detections: [] as DetectionEvent[] })
         for (const d of detections) emitEvent(d, normalizedConfig)
         const newHeaders = new Headers(response.headers)
         if (detections.length > 0) {

@@ -21,6 +21,7 @@ const RUNTIME_KEYS = new Set<string>([
   "strictMode", "secrets", "bola", "rateLimit", "inputSanitize", "ssrf",
   "promptInjection", "missingAuth", "aiRateLimit", "aiEndpointShield",
   "tamper", "tenantAware", "stripFields", "rateLimitConfig", "aiRateLimitConfig",
+  "maxResponseScanBytes", "maxRequestInspectBytes", "securityHeaders",
 ])
 
 export function configPullEnabled(config: SeptrConfig): boolean {

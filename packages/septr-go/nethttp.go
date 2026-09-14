@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math/rand"
 	"net/http"
 	"strings"
@@ -16,6 +17,7 @@ type NetHTTPMiddleware struct {
 	config         *Config
 	generalLimiter *SlidingWindowRateLimiter
 	authLimiter    *SlidingWindowRateLimiter
+	guard          *EngineGuard
 	selfTestEvent  *sync.WaitGroup
 	selfTestToken  string
 	selfTestDone   bool
@@ -50,11 +52,32 @@ func NewNetHTTP(config *Config) *NetHTTPMiddleware {
 	}
 	StartConfigPolling(config)
 	m.selfTestToken = fmt.Sprintf("vs_st_%08x", rand.Int63())
+	m.guard = NewEngineGuard(func(engine, reason string) {
+		emitEvent(degradedEvent(engine, reason), config)
+	})
 	return m
 }
 
 func (m *NetHTTPMiddleware) Wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Emergency kill switch: bypass everything, keep the app untouched.
+		if killSwitchEngaged() {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		appEntered := false
+		defer func() {
+			if rec := recover(); rec != nil {
+				if appEntered {
+					panic(rec)
+				}
+				log.Printf("septr: recovered from middleware panic; failing open: %v", rec)
+				appEntered = true
+				next.ServeHTTP(w, r)
+			}
+		}()
+
 		path := r.URL.Path
 		method := r.Method
 		headers := r.Header
@@ -94,13 +117,17 @@ func (m *NetHTTPMiddleware) Wrap(next http.Handler) http.Handler {
 				limiter = m.authLimiter
 			}
 			if limiter != nil {
-				allowed, _, resetMs := limiter.Check(ip)
+				var allowed bool
+				var resetMs int64
+				GuardedVoid(m.guard, "rate_limit", func() {
+					allowed, _, resetMs = limiter.Check(ip)
+				})
 				if !allowed {
 					emitEvent(DetectionEvent{
 						Type: "rate_limit", Severity: "medium",
-						PatternID: "rate_limit_exceeded",
+						PatternID:   "rate_limit_exceeded",
 						Description: "Rate limit exceeded for " + path,
-						Route: path, Method: method, Timestamp: nowMs(),
+						Route:       path, Method: method, Timestamp: nowMs(),
 					}, m.config)
 					w.Header().Set("Retry-After", fmt.Sprintf("%d", resetMs/1000))
 					http.Error(w, `{"error":"Too many requests"}`, http.StatusTooManyRequests)
@@ -114,17 +141,38 @@ func (m *NetHTTPMiddleware) Wrap(next http.Handler) http.Handler {
 		var bodyMap map[string]interface{}
 		needsBody := m.config.InputSanitizeEnabled() || m.config.TamperEnabled() || m.config.SSRFEnabled() || m.config.PromptInjectionEnabled()
 		if needsBody && (method == "POST" || method == "PUT" || method == "PATCH" || method == "DELETE") {
-			bodyBytes, _ = io.ReadAll(r.Body)
-			r.Body.Close()
-			if len(bodyBytes) > 0 {
-				json.Unmarshal(bodyBytes, &bodyMap)
+			maxInspect := int64(m.config.RequestInspectMaxBytes())
+			switch {
+			case r.ContentLength > maxInspect:
+				// Too large to inspect: leave the body untouched for the app.
+			case r.ContentLength >= 0:
+				bodyBytes, _ = io.ReadAll(r.Body)
+				r.Body.Close()
+				if len(bodyBytes) > 0 {
+					json.Unmarshal(bodyBytes, &bodyMap)
+				}
+				r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+			default:
+				// Unknown length (chunked): inspect a prefix, stream the rest.
+				prefix, _ := io.ReadAll(io.LimitReader(r.Body, maxInspect+1))
+				if int64(len(prefix)) <= maxInspect {
+					bodyBytes = prefix
+				} else {
+					bodyBytes = prefix[:maxInspect]
+				}
+				if len(bodyBytes) > 0 {
+					json.Unmarshal(bodyBytes, &bodyMap)
+				}
+				r.Body = io.NopCloser(io.MultiReader(bytes.NewReader(prefix), r.Body))
 			}
-			r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 		}
 
 		// --- Phase 3: Tamper detection (business logic) ---
 		if m.config.TamperEnabled() && bodyMap != nil {
-			tamperEvents := detectBusinessLogicTamper(bodyMap, m.config.FieldConstraints, path, method)
+			var tamperEvents []DetectionEvent
+			GuardedVoid(m.guard, "tamper", func() {
+				tamperEvents = detectBusinessLogicTamper(bodyMap, m.config.FieldConstraints, path, method)
+			})
 			for _, d := range tamperEvents {
 				emitEvent(d, m.config)
 			}
@@ -137,7 +185,13 @@ func (m *NetHTTPMiddleware) Wrap(next http.Handler) http.Handler {
 		// --- Phase 4: Input sanitize (SQLi / XSS) ---
 		if m.config.InputSanitizeEnabled() {
 			if bodyMap != nil {
-				if block, sanitizeDets := sanitizeInput(bodyMap, 0); block {
+				var sanitizeDets []DetectionEvent
+				block := Guarded(m.guard, "input_sanitize", false, func() bool {
+					b, dets := sanitizeInput(bodyMap, 0)
+					sanitizeDets = dets
+					return b
+				})
+				if block {
 					for _, d := range sanitizeDets {
 						emitEvent(d, m.config)
 					}
@@ -157,7 +211,13 @@ func (m *NetHTTPMiddleware) Wrap(next http.Handler) http.Handler {
 				}
 			}
 			if len(queryMap) > 0 {
-				if block, qd := sanitizeQuery(queryMap); block {
+				var qd []DetectionEvent
+				block := Guarded(m.guard, "input_sanitize", false, func() bool {
+					b, dets := sanitizeQuery(queryMap)
+					qd = dets
+					return b
+				})
+				if block {
 					for _, d := range qd {
 						emitEvent(d, m.config)
 					}
@@ -178,7 +238,10 @@ func (m *NetHTTPMiddleware) Wrap(next http.Handler) http.Handler {
 			if len(bodyBytes) > 0 {
 				ssrfInput += " " + string(bodyBytes)
 			}
-			ssrfEvents := detectSSRF(ssrfInput)
+			var ssrfEvents []DetectionEvent
+			GuardedVoid(m.guard, "ssrf", func() {
+				ssrfEvents = detectSSRF(ssrfInput)
+			})
 			for _, d := range ssrfEvents {
 				emitEvent(d, m.config)
 			}
@@ -194,7 +257,10 @@ func (m *NetHTTPMiddleware) Wrap(next http.Handler) http.Handler {
 			if len(bodyBytes) > 0 {
 				piInput += " " + string(bodyBytes)
 			}
-			piEvents := detectPromptInjection(piInput)
+			var piEvents []DetectionEvent
+			GuardedVoid(m.guard, "prompt_injection", func() {
+				piEvents = detectPromptInjection(piInput)
+			})
 			for _, d := range piEvents {
 				emitEvent(d, m.config)
 			}
@@ -211,18 +277,22 @@ func (m *NetHTTPMiddleware) Wrap(next http.Handler) http.Handler {
 			if strings.HasPrefix(auth, "Bearer ") {
 				token = auth[7:]
 			}
-			tokenClaims := extractTokenClaims(token)
-			template := MatchRouteTemplate(path, m.config.RouteTemplates)
-			routeParams := extractRouteParams(path)
-			routeParamValues := map[string]string{}
-			routeForEvent := path
-			if template != "" {
-				routeParams = extractRouteParams(template)
-				routeParamValues = ExtractRouteParamValues(template, path)
-				routeForEvent = template
-			}
-			if ev := detectBOLA(routeParams, nil, tokenClaims, routeForEvent, method, routeParamValues); ev != nil {
-				emitEvent(*ev, m.config)
+			var bolaEvent *DetectionEvent
+			GuardedVoid(m.guard, "bola", func() {
+				tokenClaims := extractTokenClaims(token)
+				template := MatchRouteTemplate(path, m.config.RouteTemplates)
+				routeParams := extractRouteParams(path)
+				routeParamValues := map[string]string{}
+				routeForEvent := path
+				if template != "" {
+					routeParams = extractRouteParams(template)
+					routeParamValues = ExtractRouteParamValues(template, path)
+					routeForEvent = template
+				}
+				bolaEvent = detectBOLA(routeParams, nil, tokenClaims, routeForEvent, method, routeParamValues)
+			})
+			if bolaEvent != nil {
+				emitEvent(*bolaEvent, m.config)
 				if m.config.StrictMode {
 					w.WriteHeader(http.StatusNotFound)
 					return
@@ -233,32 +303,48 @@ func (m *NetHTTPMiddleware) Wrap(next http.Handler) http.Handler {
 		// --- Phase 8: Missing auth detection (advisory only) ---
 		if m.config.MissingAuthEnabled() {
 			authHeader := headers.Get("authorization")
-			if ev := detectMissingAuth(path, method, authHeader); ev != nil {
-				emitEvent(*ev, m.config)
+			var maEvent *DetectionEvent
+			GuardedVoid(m.guard, "missing_auth", func() {
+				maEvent = detectMissingAuth(path, method, authHeader)
+			})
+			if maEvent != nil {
+				emitEvent(*maEvent, m.config)
 			}
 		}
 
 		// --- Phase 9: Secrets / response interceptor ---
 		needsResponseInspection := m.config.SecretsEnabled() || m.config.AIRateLimitEnabled() || m.config.TenantAware != nil
 		if needsResponseInspection {
-			lw := &lockedWriter{header: w.Header(), buf: &bytes.Buffer{}}
+			lw := &lockedWriter{
+				header:   w.Header(),
+				buf:      &bytes.Buffer{},
+				dst:      w,
+				maxBytes: m.config.ResponseScanMaxBytes(),
+			}
 			next.ServeHTTP(lw, r)
 
 			// Advisory: report responses missing standard security headers.
-			for _, d := range DetectMissingSecurityHeaders(w.Header()) {
-				emitEvent(d, m.config)
+			if m.config.SecurityHeadersEnabled() {
+				for _, d := range Guarded(m.guard, "security_headers", []DetectionEvent{}, func() []DetectionEvent {
+					return DetectMissingSecurityHeaders(w.Header())
+				}) {
+					emitEvent(d, m.config)
+				}
 			}
 
-			if lw.statusCode >= 200 && lw.statusCode < 300 && lw.buf.Len() > 0 {
+			if !lw.overflow && lw.statusCode >= 200 && lw.statusCode < 300 && lw.buf.Len() > 0 && lw.buf.Len() <= m.config.ResponseScanMaxBytes() {
 				ct := w.Header().Get("Content-Type")
 				isJSON := strings.Contains(ct, "application/json")
 
 				// AI Rate Limit detection (response body)
 				if m.config.AIRateLimitEnabled() {
 					bodyStr := lw.buf.String()
-					aiEvents := detectAIRateLimit(bodyStr, path, method)
-					for _, d := range aiEvents {
-						emitEvent(d, m.config)
+					if hasRateLimitHint(bodyStr) {
+						for _, d := range Guarded(m.guard, "ai_rate_limit", []DetectionEvent{}, func() []DetectionEvent {
+							return detectAIRateLimit(bodyStr, path, method)
+						}) {
+							emitEvent(d, m.config)
+						}
 					}
 				}
 
@@ -269,18 +355,22 @@ func (m *NetHTTPMiddleware) Wrap(next http.Handler) http.Handler {
 					if strings.HasPrefix(auth, "Bearer ") {
 						token = auth[7:]
 					}
-					claims := extractTokenClaims(token)
-					tenantID := extractTenantFromJwt(claims, m.config.TenantAware.JWTClaim)
+					var tenantID string
+					GuardedVoid(m.guard, "tenant_aware", func() {
+						claims := extractTokenClaims(token)
+						tenantID = extractTenantFromJwt(claims, m.config.TenantAware.JWTClaim)
+					})
 					if tenantID != "" {
 						var respBody interface{}
 						if err := json.Unmarshal(lw.buf.Bytes(), &respBody); err == nil {
-							blocked, leaks := createTenantCheckResponse(tenantID, respBody, *m.config.TenantAware)
+							tc := guardedTenantCheck(m.guard, tenantID, respBody, *m.config.TenantAware)
+							blocked, leaks := tc.Blocked, tc.Leaks
 							for _, leak := range leaks {
 								emitEvent(DetectionEvent{
 									Type: "cross_tenant_leak", Severity: "critical",
-									PatternID: "cross_tenant_mismatch",
+									PatternID:   "cross_tenant_mismatch",
 									Description: "Cross-tenant data leak at " + leak.Path + " — value does not match tenant " + tenantID,
-									Route: path, Method: method, Timestamp: nowMs(),
+									Route:       path, Method: method, Timestamp: nowMs(),
 								}, m.config)
 							}
 							if blocked {
@@ -295,7 +385,8 @@ func (m *NetHTTPMiddleware) Wrap(next http.Handler) http.Handler {
 				if m.config.SecretsEnabled() && isJSON {
 					var bodyData interface{}
 					if err := json.Unmarshal(lw.buf.Bytes(), &bodyData); err == nil {
-						cleaned, stripDets := stripSensitiveData(bodyData, m.config.StripFields)
+						stripped := guardedStrip(m.guard, bodyData, m.config.StripFields)
+						cleaned, stripDets := stripped.Body, stripped.Dets
 						if len(stripDets) > 0 {
 							for _, d := range stripDets {
 								emitEvent(d, m.config)
@@ -311,6 +402,9 @@ func (m *NetHTTPMiddleware) Wrap(next http.Handler) http.Handler {
 				}
 			}
 
+			if lw.overflow {
+				return
+			}
 			w.WriteHeader(lw.statusCode)
 			w.Write(lw.buf.Bytes())
 			return
@@ -359,6 +453,11 @@ type lockedWriter struct {
 	buf         *bytes.Buffer
 	statusCode  int
 	wroteHeader bool
+	// dst/maxBytes/overflow enable capped capture: once a response exceeds
+	// maxBytes it is streamed straight to dst instead of held in memory.
+	dst      http.ResponseWriter
+	maxBytes int
+	overflow bool
 }
 
 func (w *lockedWriter) Header() http.Header { return w.header }
@@ -371,12 +470,32 @@ func (w *lockedWriter) WriteHeader(code int) {
 	w.statusCode = code
 }
 
+// overflowTo commits the status and streams the buffered bytes plus this
+// chunk straight to the client.
+func (w *lockedWriter) overflowTo(first []byte) (int, error) {
+	w.overflow = true
+	w.dst.WriteHeader(w.statusCode)
+	if w.buf.Len() > 0 {
+		if _, err := w.dst.Write(w.buf.Bytes()); err != nil {
+			return 0, err
+		}
+		w.buf.Reset()
+	}
+	return w.dst.Write(first)
+}
+
 func (w *lockedWriter) Write(b []byte) (int, error) {
 	// net/http defaults an unset status to 200 on first write — mirror that
 	// so a handler that never calls WriteHeader doesn't leave statusCode 0.
 	if !w.wroteHeader {
 		w.wroteHeader = true
 		w.statusCode = http.StatusOK
+	}
+	if w.overflow {
+		return w.dst.Write(b)
+	}
+	if w.maxBytes > 0 && w.dst != nil && w.buf.Len()+len(b) > w.maxBytes {
+		return w.overflowTo(b)
 	}
 	return w.buf.Write(b)
 }

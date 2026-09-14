@@ -150,12 +150,12 @@ func TestDetectMissingSecurityHeaders(t *testing.T) {
 
 func TestDetectMissingSecurityHeadersAllPresent(t *testing.T) {
 	h := map[string][]string{
-		"Content-Security-Policy":    {"default-src 'self'"},
-		"Strict-Transport-Security":  {"max-age=31536000"},
-		"X-Content-Type-Options":     {"nosniff"},
-		"X-Frame-Options":            {"DENY"},
-		"Referrer-Policy":            {"strict-origin-when-cross-origin"},
-		"content-type":               {"application/json"},
+		"Content-Security-Policy":   {"default-src 'self'"},
+		"Strict-Transport-Security": {"max-age=31536000"},
+		"X-Content-Type-Options":    {"nosniff"},
+		"X-Frame-Options":           {"DENY"},
+		"Referrer-Policy":           {"strict-origin-when-cross-origin"},
+		"content-type":              {"application/json"},
 	}
 	if events := DetectMissingSecurityHeaders(h); len(events) != 0 {
 		t.Fatalf("expected no missing headers, got %d", len(events))

@@ -11,9 +11,11 @@ import { detectSSRF } from "../core/ssrf"
 import { detectPromptInjection } from "../core/prompt-injection"
 import { detectMissingAuth } from "../core/missing-auth"
 import { detectBusinessLogicTamper } from "../core/tamper"
-import { detectAIRateLimit } from "../core/ai-rate-limit"
+import { detectAIRateLimit, hasRateLimitHint } from "../core/ai-rate-limit"
 import { extractTenantFromJwt, detectCrossTenantLeaks } from "../core/tenant-aware"
 import { runEngineSelfTest, scheduleStartupSelfTest } from "../core/self-test"
+import { EngineGuard, killSwitchEngaged } from "../core/safety"
+import type { TenantLeak } from "../core/tenant-aware"
 
 type HonoContext = {
   req: {
@@ -80,10 +82,36 @@ export function createSeptr(userConfig: SeptrConfig = {}) {
   }
   startConfigPolling(config)
 
+  const guard = new EngineGuard({
+    failureThreshold: config.engineFailureThreshold,
+    budgetMs: config.engineBudgetMs,
+    onDegraded: (engine, reason) => {
+      emitEvent({
+        type: "system",
+        severity: "info",
+        patternId: "engine_degraded",
+        description: `Engine \`${engine}\` degraded and was disabled for this process (${reason}). Restart the app to retry, or upgrade the Septr SDK.`,
+        timestamp: Date.now(),
+      }, config)
+    },
+  })
+
   let selfTestResolve: (() => void) | null = null
   const selfTestToken = `vs_st_${Math.random().toString(36).slice(2, 10)}`
 
   async function vibeShieldMiddleware(ctx: HonoContext, next: HonoNext): Promise<Response | void> {
+    if (killSwitchEngaged(config)) {
+      return next()
+    }
+    try {
+      return await vibeShieldInner(ctx, next)
+    } catch (err) {
+      console.error("[septr] middleware error; failing open", err)
+      return next()
+    }
+  }
+
+  async function vibeShieldInner(ctx: HonoContext, next: HonoNext): Promise<Response | void> {
     if (ctx.req.routePath === "/__septr_ping" && ctx.req.header("x-septr-self-test") === selfTestToken) {
       selfTestResolve?.()
       selfTestResolve = null
@@ -124,7 +152,7 @@ export function createSeptr(userConfig: SeptrConfig = {}) {
       if (["POST", "PUT", "PATCH", "DELETE"].includes(ctx.req.method)) {
         try {
           const body = await ctx.req.json()
-          const { block, detections: sanitizeDetections } = sanitizeInput(body)
+          const { block, detections: sanitizeDetections } = guard.run("input_sanitize", () => sanitizeInput(body), { block: false, detections: [] as DetectionEvent[] })
           detections.push(...sanitizeDetections)
           for (const d of sanitizeDetections) emitEvent(d, config)
           if (block && config.strictMode) {
@@ -137,7 +165,7 @@ export function createSeptr(userConfig: SeptrConfig = {}) {
 
       const query = ctx.req.query?.() ?? {}
       if (query && Object.keys(query).length > 0) {
-        const { block, detections: qd } = sanitizeQuery(query)
+        const { block, detections: qd } = guard.run("input_sanitize", () => sanitizeQuery(query), { block: false, detections: [] as DetectionEvent[] })
         detections.push(...qd)
         for (const d of qd) emitEvent(d, config)
         if (block && config.strictMode) {
@@ -150,7 +178,7 @@ export function createSeptr(userConfig: SeptrConfig = {}) {
       try {
         const body = await ctx.req.json()
         if (body && typeof body === "object") {
-          const tamperEvents = detectBusinessLogicTamper(body as Record<string, unknown>, config.fieldConstraints, ctx.req.routePath, ctx.req.method)
+          const tamperEvents = guard.run("tamper", () => detectBusinessLogicTamper(body as Record<string, unknown>, config.fieldConstraints, ctx.req.routePath, ctx.req.method), [] as DetectionEvent[])
           for (const d of tamperEvents) {
             detections.push(d)
             emitEvent(d, config)
@@ -181,7 +209,7 @@ export function createSeptr(userConfig: SeptrConfig = {}) {
       const routeParams = template ? extractRouteParams(template) : extractRouteParams(ctx.req.path)
       const routeParamValues = template && ctx.req.path ? extractRouteParamValues(template, ctx.req.path) : undefined
 
-      const bolaEvent = detectBOLA(routeParams, null, tokenClaims, routeForEvent, ctx.req.method, routeParamValues)
+      const bolaEvent = guard.run("bola", () => detectBOLA(routeParams, null, tokenClaims, routeForEvent, ctx.req.method, routeParamValues), null)
       if (bolaEvent) {
         detections.push(bolaEvent)
         for (const d of detections) emitEvent(d, config)
@@ -205,7 +233,7 @@ export function createSeptr(userConfig: SeptrConfig = {}) {
       } catch { /* body not JSON */ }
       const ssrfInput = ssrfInputs.join(" ")
       if (ssrfInput) {
-        const ssrfEvents = detectSSRF(ssrfInput)
+        const ssrfEvents = guard.run("ssrf", () => detectSSRF(ssrfInput), [] as DetectionEvent[])
         for (const d of ssrfEvents) {
           detections.push(d)
           emitEvent(d, config)
@@ -221,7 +249,7 @@ export function createSeptr(userConfig: SeptrConfig = {}) {
       try {
         const body = await ctx.req.json()
         const piInput = typeof body === "string" ? body : JSON.stringify(body)
-        const piEvents = detectPromptInjection(piInput)
+        const piEvents = guard.run("prompt_injection", () => detectPromptInjection(piInput), [] as DetectionEvent[])
         for (const d of piEvents) {
           detections.push(d)
           emitEvent(d, config)
@@ -256,7 +284,7 @@ export function createSeptr(userConfig: SeptrConfig = {}) {
         if (tenantId) {
           try {
             const body = await ctx.res.clone().json()
-            const leaks = detectCrossTenantLeaks(tenantId, body, taConfig.tenantColumn)
+            const leaks = guard.run("tenant_aware", () => detectCrossTenantLeaks(tenantId, body, taConfig.tenantColumn), [] as TenantLeak[])
             if (leaks.length > 0) {
               const ctEvent: DetectionEvent = {
                 type: "cross_tenant_leak",
@@ -293,9 +321,9 @@ export function createSeptr(userConfig: SeptrConfig = {}) {
       }
     }
 
-    if (ctx.res && !["/__septr_ping"].includes(ctx.req.routePath)) {
+    if (ctx.res && config.securityHeaders !== false && !["/__septr_ping"].includes(ctx.req.routePath)) {
       // Advisory: report responses missing standard security headers.
-      for (const d of detectMissingSecurityHeaders(ctx.res.headers)) {
+      for (const d of guard.run("security_headers", () => detectMissingSecurityHeaders(ctx.res.headers), [] as DetectionEvent[])) {
         emitEvent(d, config)
       }
     }
@@ -303,15 +331,19 @@ export function createSeptr(userConfig: SeptrConfig = {}) {
     if (config.secrets && ctx.res) {
       try {
         const contentLength = Number(ctx.res.headers.get("content-length") || 0)
-        if (contentLength > 1_000_000) {
+        const maxInspect = config.maxResponseScanBytes && config.maxResponseScanBytes > 0 ? config.maxResponseScanBytes : 1_000_000
+        if (contentLength > maxInspect) {
           // skip response inspection for large payloads
         } else {
           const body = await ctx.res.clone().json()
           if (config.aiRateLimit) {
-            const aiEvents = detectAIRateLimit(JSON.stringify(body), ctx.req.routePath, ctx.req.method)
+            const serialized = JSON.stringify(body)
+            const aiEvents = hasRateLimitHint(serialized)
+              ? guard.run("ai_rate_limit", () => detectAIRateLimit(serialized, ctx.req.routePath, ctx.req.method), [] as DetectionEvent[])
+              : []
             for (const d of aiEvents) emitEvent(d, config)
           }
-          const { cleaned, detections: stripDetections } = stripSensitiveData(body, config.stripFields)
+          const { cleaned, detections: stripDetections } = guard.run("secrets", () => stripSensitiveData(body, config.stripFields), { cleaned: body, detections: [] as DetectionEvent[] })
           for (const d of stripDetections) emitEvent(d, config)
           if (stripDetections.length > 0) {
             const newHeaders = new Headers(ctx.res.headers)

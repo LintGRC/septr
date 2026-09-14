@@ -60,7 +60,7 @@ func TestStripSensitiveData_MixedAdvisoryAndRealSecret(t *testing.T) {
 func TestStripSensitiveData_AdvisoryOnlyNotRedacted(t *testing.T) {
 	data := map[string]interface{}{"msg": "AIzaSy" + "BQom12tzI-rybN7Sf-KfeL4nwm-Rf7PmI"}
 	cleaned, _ := stripSensitiveData(data)
-	if cleaned.(map[string]interface{})["msg"] != "AIzaSy" + "BQom12tzI-rybN7Sf-KfeL4nwm-Rf7PmI" {
+	if cleaned.(map[string]interface{})["msg"] != "AIzaSy"+"BQom12tzI-rybN7Sf-KfeL4nwm-Rf7PmI" {
 		t.Fatal("advisory-only key must not be redacted")
 	}
 }

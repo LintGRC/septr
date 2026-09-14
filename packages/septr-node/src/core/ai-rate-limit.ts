@@ -46,6 +46,15 @@ const PATTERNS: PatternDef[] = [
   },
 ]
 
+/** Cheap substring prefilter so the full pattern set only runs when the body
+ * could plausibly contain a rate-limit/quota message. Response bodies can be
+ * large app payloads; six regexes over every response is wasted work when none
+ * of the literal markers are present. */
+export function hasRateLimitHint(body: string): boolean {
+  const lowered = body.toLowerCase()
+  return lowered.includes("429") || lowered.includes("rate") || lowered.includes("quota")
+}
+
 export function detectAIRateLimit(
   body: string,
   route?: string,

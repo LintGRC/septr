@@ -54,6 +54,21 @@ export interface SeptrConfig {
   aiRateLimit?: boolean
   tamper?: boolean
   stripFields?: string[]
+  /** Cap on response-body scanning, in characters. Larger responses pass
+   * through unscanned (default 1_000_000). */
+  maxResponseScanBytes?: number
+  /** Cap on request-body inspection, in characters. Larger bodies pass
+   * through untouched (default 256_000). */
+  maxRequestInspectBytes?: number
+  /** Emergency bypass: pass every request through untouched. */
+  disabled?: boolean
+  /** Report responses missing standard security headers (default true).
+   * Disable when an app middleware or edge proxy manages the headers. */
+  securityHeaders?: boolean
+  /** Consecutive engine failures before the breaker skips that engine. */
+  engineFailureThreshold?: number
+  /** Per-engine time budget in ms; slower calls count as failures. */
+  engineBudgetMs?: number
   telemetry?: boolean
   telemetryUrl?: string
   /** Poll the Septr backend for live config (strictMode, engine toggles). Default: on when apiKey is set. */

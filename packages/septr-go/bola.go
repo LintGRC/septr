@@ -172,9 +172,9 @@ func detectBOLA(routeParams []string, bodyParams map[string]string, tokenClaims 
 			if param == field && value != tokenUserID {
 				return &DetectionEvent{
 					Type: "bola", Severity: "high",
-					PatternID: "bola_param_mismatch",
+					PatternID:   "bola_param_mismatch",
 					Description: "Route param `" + param + "=" + value + "` does not match authenticated user `" + tokenUserID + "`",
-					Route: route, Method: method,
+					Route:       route, Method: method,
 					Timestamp: nowMs(),
 				}
 			}
@@ -189,9 +189,9 @@ func detectBOLA(routeParams []string, bodyParams map[string]string, tokenClaims 
 				}
 				return &DetectionEvent{
 					Type: "bola", Severity: "high",
-					PatternID: "bola_param_mismatch",
+					PatternID:   "bola_param_mismatch",
 					Description: "Route param `" + param + "` may be manipulable",
-					Route: route, Method: method,
+					Route:       route, Method: method,
 					Timestamp: nowMs(),
 				}
 			}
@@ -203,9 +203,9 @@ func detectBOLA(routeParams []string, bodyParams map[string]string, tokenClaims 
 			if val, ok := bodyParams[field]; ok && val != tokenUserID {
 				return &DetectionEvent{
 					Type: "bola", Severity: "critical",
-					PatternID: "bola_body_mismatch",
+					PatternID:   "bola_body_mismatch",
 					Description: "Body field `" + field + "` does not match authenticated user",
-					Route: route, Method: method,
+					Route:       route, Method: method,
 					Timestamp: nowMs(),
 				}
 			}

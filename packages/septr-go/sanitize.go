@@ -52,7 +52,6 @@ var xssPatterns = []struct {
 	{id: "xss_svg_script", pattern: regexp.MustCompile(`(?i)<svg[\s>][\s\S]*?<script`)},
 }
 
-
 var sqlKeywords = []string{
 	"SELECT", "UNION", "INSERT", "DELETE", "DROP", "ALTER", "UPDATE", "CREATE",
 	"EXEC", "EXECUTE", "FROM", "WHERE", "TABLE", "INTO", "OUTFILE", "LOAD_FILE",

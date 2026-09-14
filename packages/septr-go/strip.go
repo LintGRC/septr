@@ -41,9 +41,9 @@ func stripSensitiveData(obj interface{}, customFields ...[]string) (interface{},
 				if shouldStripKey(key, customFields...) {
 					detections = append(detections, DetectionEvent{
 						Type: "data_strip", Severity: "medium",
-						PatternID: "strip_field",
+						PatternID:   "strip_field",
 						Description: "Field `" + key + "` stripped from response",
-						StatusCode: 200, Timestamp: nowMs(),
+						StatusCode:  200, Timestamp: nowMs(),
 					})
 					result[key] = "[REDACTED]"
 				} else {

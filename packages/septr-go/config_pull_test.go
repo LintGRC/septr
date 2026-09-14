@@ -21,7 +21,6 @@ func TestRemoteConfigEnabled(t *testing.T) {
 	}
 }
 
-
 func TestProjectIDFromKey(t *testing.T) {
 	pid := projectIDFromKey("septr_live_11111111-2222-3333-4444-555555555555_abcd0123456789abcdef0123456789ab")
 	if pid != "11111111-2222-3333-4444-555555555555" {

@@ -29,9 +29,9 @@ func TestExtractTenantFromJwt_NilClaims(t *testing.T) {
 
 func TestDetectCrossTenantLeaks_Mismatch(t *testing.T) {
 	body := map[string]interface{}{
-		"org_id":  "other-org",
-		"data":    map[string]interface{}{"org_id": "my-org"},
-		"name":    "test",
+		"org_id": "other-org",
+		"data":   map[string]interface{}{"org_id": "my-org"},
+		"name":   "test",
 	}
 	leaks := detectCrossTenantLeaks("my-org", body, "org_id")
 	if len(leaks) != 1 {

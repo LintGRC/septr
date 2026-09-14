@@ -90,21 +90,23 @@ func FetchRemoteConfig(cfg *Config) map[string]interface{} {
 }
 
 var remoteRuntimeKeys = map[string]bool{
-	"strictMode":        true,
-	"secrets":           true,
-	"bola":              true,
-	"rateLimit":         true,
-	"inputSanitize":     true,
-	"ssrf":              true,
-	"promptInjection":   true,
-	"missingAuth":       true,
-	"aiRateLimit":       true,
-	"aiEndpointShield":  true,
-	"tamper":            true,
-	"tenantAware":       true,
-	"stripFields":       true,
-	"rateLimitConfig":   true,
-	"aiRateLimitConfig": true,
+	"strictMode":             true,
+	"secrets":                true,
+	"bola":                   true,
+	"rateLimit":              true,
+	"inputSanitize":          true,
+	"ssrf":                   true,
+	"promptInjection":        true,
+	"missingAuth":            true,
+	"aiRateLimit":            true,
+	"aiEndpointShield":       true,
+	"tamper":                 true,
+	"tenantAware":            true,
+	"stripFields":            true,
+	"rateLimitConfig":        true,
+	"aiRateLimitConfig":      true,
+	"maxResponseScanBytes":   true,
+	"maxRequestInspectBytes": true,
 }
 
 // ApplyRemoteConfig merges runtime-affecting keys into cfg under the config lock.
@@ -169,6 +171,24 @@ func ApplyRemoteConfig(cfg *Config, remote map[string]interface{}) {
 					}
 				}
 				cfg.StripFields = fields
+			}
+		case "securityHeaders":
+			if v, ok := value.(bool); ok {
+				cfg.SecurityHeaders = &v
+			}
+		case "maxResponseScanBytes":
+			switch v := value.(type) {
+			case float64:
+				cfg.MaxResponseScanBytes = int(v)
+			case int:
+				cfg.MaxResponseScanBytes = v
+			}
+		case "maxRequestInspectBytes":
+			switch v := value.(type) {
+			case float64:
+				cfg.MaxRequestInspectBytes = int(v)
+			case int:
+				cfg.MaxRequestInspectBytes = v
 			}
 		}
 	}

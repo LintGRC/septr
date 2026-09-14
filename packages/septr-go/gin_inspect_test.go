@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -61,5 +62,40 @@ func TestGinInspectWriter_PassthroughOnPlainJSON(t *testing.T) {
 	}
 	if !bytes.Contains(w.Body.Bytes(), []byte("John")) {
 		t.Fatal("body must pass through unchanged")
+	}
+}
+
+func TestGinInspectWriter_SkipsLargeResponseScan(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	secretsOn := true
+	cfg := &Config{
+		APIKey:               "vs_test_key",
+		Secrets:              &secretsOn,
+		StripFields:          []string{"api_key"},
+		TelemetryURL:         "false",
+		MaxResponseScanBytes: 512,
+	}
+	m := NewGin(cfg)
+	r.Use(m.Handler())
+	r.GET("/big", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"api_key": "sk_live_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ123456",
+			"filler":  strings.Repeat("x", 2048),
+		})
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/big", nil)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if w.Header().Get("X-Septr-Stripped") != "" {
+		t.Fatal("oversized response must not be scanned")
+	}
+	if !bytes.Contains(w.Body.Bytes(), []byte("sk_live_")) {
+		t.Fatal("oversized response must pass through untouched")
 	}
 }

@@ -57,3 +57,15 @@ func TestDetectAIRateLimit_SafeResponse(t *testing.T) {
 		t.Errorf("expected no detection on normal response, got %d", len(events))
 	}
 }
+
+func TestHasRateLimitHint(t *testing.T) {
+	if !hasRateLimitHint(`{"error": {"code": "insufficient_quota"}}`) {
+		t.Fatal("expected hint for quota payload")
+	}
+	if !hasRateLimitHint(`{"error": "429 Too Many Requests"}`) {
+		t.Fatal("expected hint for 429 payload")
+	}
+	if hasRateLimitHint(`{"report": "quarterly numbers", "total": 42}`) {
+		t.Fatal("expected no hint for plain report payload")
+	}
+}

@@ -79,8 +79,8 @@ def apply_remote_config(config: dict, remote: dict) -> bool:
     runtime_keys = {
         "strictMode", "secrets", "bola", "rateLimit", "inputSanitize", "ssrf",
         "promptInjection", "missingAuth", "aiRateLimit", "aiEndpointShield",
-        "tamperDetection", "dataStrip", "stripFields",
-        "rateLimitConfig", "aiRateLimitConfig",
+        "tamperDetection", "dataStrip", "stripFields", "securityHeaders",
+        "rateLimitConfig", "aiRateLimitConfig", "maxResponseScanBytes",
     }
     merged = {k: v for k, v in remote.items() if k in runtime_keys}
     if not merged:

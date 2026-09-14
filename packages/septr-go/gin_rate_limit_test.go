@@ -13,7 +13,7 @@ import (
 func TestGin_AuthRouteGetUsesGeneralLimiter(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	m := NewGin(&Config{
-		RateLimit:      boolPtr(true),
+		RateLimit:       boolPtr(true),
 		RateLimitConfig: &RateLimitConfig{Max: 2, WindowMs: 60000},
 	})
 	r := gin.New()
@@ -36,7 +36,7 @@ func TestGin_AuthRouteGetUsesGeneralLimiter(t *testing.T) {
 func TestGin_AuthRoutePostKeepsStrictAuthLimiter(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	m := NewGin(&Config{
-		RateLimit:      boolPtr(true),
+		RateLimit:       boolPtr(true),
 		RateLimitConfig: &RateLimitConfig{Max: 100, WindowMs: 60000},
 	})
 	r := gin.New()

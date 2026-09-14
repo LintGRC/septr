@@ -81,6 +81,12 @@ fastify.addHook("preSerialization", shield.preSerialization)
 | `tamper` | boolean | `true` | Business-logic tamper detection |
 | `missingAuth` | boolean | `true` | Missing-auth detection |
 | `stripFields` | string[] | `[]` | Fields to strip from responses |
+| `maxResponseScanBytes` | number | `1000000` | Max response size scanned (chars); larger responses stream through unscanned |
+| `maxRequestInspectBytes` | number | `256000` | Max request body inspected (chars); larger bodies stream through untouched |
+| `engineFailureThreshold` | number | `3` | Consecutive engine failures before the breaker skips that engine |
+| `engineBudgetMs` | number | `50` | Per-engine time budget; slower calls count as failures |
+| `disabled` | boolean | `false` | Emergency bypass — pass every request through untouched |
+| `securityHeaders` | boolean | `true` | Report responses missing security headers |
 | `remoteConfig` | boolean | `true` | Poll backend for live config |
 
 ## Source scanning (CLI)

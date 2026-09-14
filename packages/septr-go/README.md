@@ -70,6 +70,9 @@ r.Use(septr.NewGin(&septr.Config{
 | `Tamper` | *bool | `true` | Business-logic tamper detection |
 | `AIRateLimit` | *bool | `true` | Rate limiting for AI endpoints |
 | `StripFields` | []string | `[]` | Fields to strip from responses |
+| `MaxResponseScanBytes` | int | `262144` | Max response size scanned (bytes); larger responses stream through unscanned |
+| `MaxRequestInspectBytes` | int | `262144` | Max request body inspected (bytes); larger bodies stream through untouched |
+| `SecurityHeaders` | *bool | `true` | Report responses missing security headers |
 
 ## Environment variables
 

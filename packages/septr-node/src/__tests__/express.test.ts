@@ -166,4 +166,22 @@ describe("Express adapter", () => {
 
     expect(res.setHeader).toHaveBeenCalledWith("X-Septr-Stripped", "1")
   })
+
+  it("does not scan responses larger than maxResponseScanBytes", () => {
+    const middleware = createSeptr({
+      secrets: true,
+      bola: false,
+      rateLimit: false,
+      maxResponseScanBytes: 512,
+    })
+    const req = makeReq()
+    const res = makeRes()
+    const next = vi.fn()
+
+    middleware(req, res, next)
+    res.json({ apiKey: "sk-proj-" + "x".repeat(40), filler: "x".repeat(1024) })
+
+    expect(res.setHeader).not.toHaveBeenCalledWith("X-Septr-Stripped", expect.any(String))
+    expect(res._jsonBody().apiKey).toContain("sk-proj-")
+  })
 })

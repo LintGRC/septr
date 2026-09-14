@@ -18,18 +18,19 @@ const (
 
 	// sdkVersion is the septr-go release. Go modules have no runtime version
 	// metadata, so this is kept in sync manually with the module tag.
-	sdkVersion = "0.1.0"
+	sdkVersion = "0.1.24"
 )
 
 type TelemetryManager struct {
-	mu                  sync.Mutex
-	buffer              []DetectionEvent
-	projectID           string
-	config              *Config
+	mu                   sync.Mutex
+	buffer               []DetectionEvent
+	projectID            string
+	config               *Config
 	currentFlushInterval int
-	ticker              *time.Ticker
-	done                chan struct{}
-	destroyed           bool
+	ticker               *time.Ticker
+	done                 chan struct{}
+	flushCh              chan struct{}
+	destroyed            bool
 }
 
 var defaultManager *TelemetryManager
@@ -141,11 +142,12 @@ func startHandshakeRetry(config *Config, apiKey string) {
 
 func NewTelemetryManager(config *Config, projectID string) *TelemetryManager {
 	t := &TelemetryManager{
-		buffer:              make([]DetectionEvent, 0, maxBatchSize),
-		projectID:           projectID,
-		config:              config,
+		buffer:               make([]DetectionEvent, 0, maxBatchSize),
+		projectID:            projectID,
+		config:               config,
 		currentFlushInterval: defaultFlushIntervalMs,
-		done:                make(chan struct{}),
+		done:                 make(chan struct{}),
+		flushCh:              make(chan struct{}, 1),
 	}
 	if t.currentFlushInterval > 0 {
 		t.ticker = time.NewTicker(time.Duration(t.currentFlushInterval) * time.Millisecond)
@@ -158,6 +160,8 @@ func (t *TelemetryManager) flushLoop() {
 	for {
 		select {
 		case <-t.ticker.C:
+			t.Flush()
+		case <-t.flushCh:
 			t.Flush()
 		case <-t.done:
 			return
@@ -177,8 +181,14 @@ func (t *TelemetryManager) Emit(event DetectionEvent) {
 	shouldFlush := len(t.buffer) >= maxBatchSize
 	t.mu.Unlock()
 
+	// Telemetry must never block the request path: signal the background
+	// flusher instead of sending inline. The buffered channel coalesces
+	// signals, so bursts don't spawn concurrent sends.
 	if shouldFlush {
-		t.Flush()
+		select {
+		case t.flushCh <- struct{}{}:
+		default:
+		}
 	}
 }
 
@@ -217,9 +227,9 @@ func (t *TelemetryManager) sendBatch(batch []DetectionEvent) error {
 	events := make([]map[string]interface{}, len(batch))
 	for i, e := range batch {
 		m := map[string]interface{}{
-			"type":       e.Type,
-			"severity":   e.Severity,
-			"patternId":  e.PatternID,
+			"type":        e.Type,
+			"severity":    e.Severity,
+			"patternId":   e.PatternID,
 			"description": e.Description,
 		}
 		if e.Route != "" {
@@ -243,13 +253,13 @@ func (t *TelemetryManager) sendBatch(batch []DetectionEvent) error {
 	}
 
 	payload := map[string]interface{}{
-		"events":    events,
-		"projectId": t.projectID,
-		"packageName": "septr",
+		"events":         events,
+		"projectId":      t.projectID,
+		"packageName":    "septr",
 		"packageVersion": sdkVersion,
-		"environment": envOrDefault("NODE_ENV", "production"),
-		"schemaVersion": "0.1",
-		"framework": t.config.framework,
+		"environment":    envOrDefault("NODE_ENV", "production"),
+		"schemaVersion":  "0.1",
+		"framework":      t.config.framework,
 	}
 
 	body, _ := json.Marshal(payload)

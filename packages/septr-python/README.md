@@ -72,6 +72,12 @@ create_septr_flask(app, {"apiKey": os.getenv("SEPTR_API_KEY")})
 | `publicRoutes` | list[str] | `[]` | Path prefixes treated as public (e.g. `["/api/v1/feed"]`) |
 | `publicRoutesExact` | list[str] | `[]` | Exact paths treated as public (e.g. `["/"]`) |
 | `stripFields` | list[str] | `[]` | Fields to strip from responses |
+| `maxResponseScanBytes` | int | `262144` | Max response size scanned (bytes); larger responses stream through unscanned |
+| `maxRequestInspectBytes` | int | `262144` | Max request body inspected (bytes); larger bodies stream through untouched |
+| `engineFailureThreshold` | int | `3` | Consecutive engine failures before the breaker skips that engine |
+| `engineBudgetMs` | float | `50.0` | Per-engine time budget; slower calls count as failures |
+| `disabled` | bool | `False` | Emergency bypass — pass every request through untouched |
+| `securityHeaders` | bool | `True` | Report responses missing security headers (disable when another layer manages them) |
 
 ## Environment variables
 
@@ -83,6 +89,8 @@ create_septr_flask(app, {"apiKey": os.getenv("SEPTR_API_KEY")})
 - `SEPTR_ENV` — environment label sent with events (default `production`)
 - `SEPTR_SILENCE_ENV_WARNING` — set to `1` to silence the fail-loud
   missing-key warning
+- `SEPTR_DISABLED=true` — emergency bypass: pass every request through
+  untouched (no scanning, no blocking) while the SDK stays installed
 
 ## License
 

@@ -171,3 +171,181 @@ def test_headers_present_no_detection():
         (b"Referrer-Policy", b"strict-origin-when-cross-origin"),
     ])
     assert dets == []
+
+
+def test_large_response_body_is_not_scanned(app):
+    """Bodies over maxResponseScanBytes skip response scanning entirely —
+    scanning multi-MB payloads on every request burned CPU in the worker."""
+    create_septr(app, {
+        "secrets": True, "aiRateLimit": True, "rateLimit": False, "bola": False,
+        "maxResponseScanBytes": 512,
+    })
+
+    @app.route("/big")
+    def big():
+        return jsonify({
+            "token": "sk_live_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ123456",
+            "error": "insufficient_quota",
+            "filler": "x" * 2048,
+        })
+
+    client = app.test_client()
+    resp = client.get("/big")
+    assert resp.status_code == 200
+    assert resp.headers.get("X-Septr-Stripped") is None
+    assert resp.get_json()["token"].startswith("sk_live_")
+
+
+def test_non_json_response_is_not_scanned(app):
+    from flask import Response
+
+    create_septr(app, {"secrets": True, "rateLimit": False, "bola": False})
+
+    @app.route("/text")
+    def text():
+        return Response("token=sk_live_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ123456", mimetype="text/plain")
+
+    client = app.test_client()
+    resp = client.get("/text")
+    assert resp.status_code == 200
+    assert resp.headers.get("X-Septr-Stripped") is None
+    assert b"sk_live_" in resp.data
+
+
+def test_ai_rate_limit_detected_on_any_route_with_hint(app, monkeypatch):
+    """The cheap prefilter keeps AI-provider errors detectable on routes that
+    aren't named /api/chat etc. (e.g. /api/briefings/generate)."""
+    import septr.adapters.flask as flask_mod
+
+    events = []
+    monkeypatch.setattr(flask_mod, "emit_event", lambda ev, cfg: events.append(ev))
+    create_septr(app, {"aiRateLimit": True, "rateLimit": False, "secrets": False, "bola": False})
+
+    @app.route("/api/briefings/generate")
+    def generate():
+        return jsonify({"error": "You exceeded your current quota"})
+
+    client = app.test_client()
+    resp = client.get("/api/briefings/generate")
+    assert resp.status_code == 200
+    assert any(e.type == "ai_rate_limit" for e in events)
+
+
+def test_ai_rate_limit_skipped_without_hint(app, monkeypatch):
+    """Bodies with no rate-limit/quota markers never run the regex set."""
+    import septr.adapters.flask as flask_mod
+
+    events = []
+    monkeypatch.setattr(flask_mod, "emit_event", lambda ev, cfg: events.append(ev))
+    create_septr(app, {"aiRateLimit": True, "rateLimit": False, "secrets": False, "bola": False})
+
+    @app.route("/api/reports")
+    def reports():
+        return jsonify({"report": "quarterly numbers", "total": 42})
+
+    client = app.test_client()
+    resp = client.get("/api/reports")
+    assert resp.status_code == 200
+    assert not any(e.type == "ai_rate_limit" for e in events)
+
+
+def test_post_body_reaches_the_app(app):
+    """Regression: reading wsgi.input for inspection must not consume the
+    app's request body (every POST used to arrive empty → 400)."""
+    create_septr(app, {"secrets": True, "rateLimit": False, "bola": False})
+
+    @app.route("/echo", methods=["POST"])
+    def echo():
+        from flask import request
+        return jsonify({"received": request.get_json(silent=True)})
+
+    client = app.test_client()
+    resp = client.post("/echo", json={"hello": "world"})
+    assert resp.status_code == 200
+    assert resp.get_json()["received"] == {"hello": "world"}
+
+
+def test_kill_switch_bypasses_all_engines(app):
+    create_septr(app, {"secrets": True, "rateLimit": False, "bola": False, "disabled": True})
+
+    @app.route("/data")
+    def data():
+        return jsonify({"token": "sk_live_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"})
+
+    client = app.test_client()
+    resp = client.get("/data")
+    assert resp.status_code == 200
+    assert resp.get_json()["token"].startswith("sk_live_")
+    assert resp.headers.get("X-Septr-Stripped") is None
+
+
+def test_pipeline_error_fails_open(app):
+    create_septr(app, {"secrets": True, "rateLimit": False, "bola": False, "excludePaths": None})
+
+    @app.route("/data")
+    def data():
+        return jsonify({"token": "sk_live_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"})
+
+    client = app.test_client()
+    resp = client.get("/data")
+    assert resp.status_code == 200
+    assert resp.get_json()["token"].startswith("sk_live_")
+
+
+def test_large_request_body_is_not_inspected_but_reaches_app(app):
+    create_septr(app, {
+        "inputSanitize": True, "strictMode": True, "rateLimit": False,
+        "secrets": False, "bola": False, "maxRequestInspectBytes": 32,
+    })
+
+    @app.route("/echo", methods=["POST"])
+    def echo():
+        from flask import request
+        return jsonify({"received": request.get_json(silent=True)})
+
+    client = app.test_client()
+    payload = {"q": "1' OR '1'='1", "filler": "x" * 128}
+    resp = client.post("/echo", json=payload)
+    assert resp.status_code == 200, "oversized bodies must pass through untouched"
+    assert resp.get_json()["received"] == payload
+
+
+def test_oversized_response_streams_through_unscanned(app):
+    create_septr(app, {
+        "secrets": True, "rateLimit": False, "bola": False,
+        "maxResponseScanBytes": 256,
+    })
+
+    @app.route("/big")
+    def big():
+        return jsonify({
+            "token": "sk_live_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ123456",
+            "filler": "x" * 1024,
+        })
+
+    client = app.test_client()
+    resp = client.get("/big")
+    assert resp.status_code == 200
+    assert resp.headers.get("X-Septr-Stripped") is None
+    assert resp.get_json()["token"].startswith("sk_live_")
+    assert len(resp.data) > 256
+
+
+def test_security_headers_advisory_can_be_disabled(app, monkeypatch):
+    import septr.adapters.flask as flask_mod
+
+    events = []
+    monkeypatch.setattr(flask_mod, "emit_event", lambda ev, cfg: events.append(ev))
+    create_septr(app, {
+        "rateLimit": False, "bola": False, "secrets": False,
+        "securityHeaders": False,
+    })
+
+    @app.route("/data")
+    def data():
+        return jsonify({"ok": True})
+
+    client = app.test_client()
+    resp = client.get("/data")
+    assert resp.status_code == 200
+    assert not any(e.type == "security_headers" for e in events)

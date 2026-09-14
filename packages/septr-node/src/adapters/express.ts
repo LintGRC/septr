@@ -12,9 +12,10 @@ import { detectSSRF } from "../core/ssrf"
 import { detectPromptInjection } from "../core/prompt-injection"
 import { detectMissingAuth } from "../core/missing-auth"
 import { detectBusinessLogicTamper } from "../core/tamper"
-import { detectAIRateLimit } from "../core/ai-rate-limit"
-import { extractTenantFromJwt, detectCrossTenantLeaks } from "../core/tenant-aware"
+import { detectAIRateLimit, hasRateLimitHint } from "../core/ai-rate-limit"
+import { extractTenantFromJwt, detectCrossTenantLeaks, type TenantLeak } from "../core/tenant-aware"
 import { runEngineSelfTest, scheduleStartupSelfTest } from "../core/self-test"
+import { EngineGuard, killSwitchEngaged } from "../core/safety"
 import type { RequestHandler } from "express"
 
 type NextFunction = (err?: unknown) => void
@@ -108,10 +109,39 @@ export function createSeptr(userConfig: SeptrConfig = {}): SeptrExpressMiddlewar
   }
   startConfigPolling(config)
 
+  const guard = new EngineGuard({
+    failureThreshold: config.engineFailureThreshold,
+    budgetMs: config.engineBudgetMs,
+    onDegraded: (engine, reason) => {
+      emitEvent({
+        type: "system",
+        severity: "info",
+        patternId: "engine_degraded",
+        description: `Engine \`${engine}\` degraded and was disabled for this process (${reason}). Restart the app to retry, or upgrade the Septr SDK.`,
+        timestamp: Date.now(),
+      }, config)
+    },
+  })
+
   let selfTestResolve: (() => void) | null = null
   const selfTestToken = `vs_st_${Math.random().toString(36).slice(2, 10)}`
 
   function vibeShieldMiddleware(req: Request, res: Response, next: NextFunction): void {
+    // Emergency kill switch: bypass everything, keep the app untouched.
+    if (killSwitchEngaged(config)) {
+      next()
+      return
+    }
+    try {
+      vibeShieldInner(req, res, next)
+    } catch (err) {
+      console.error("[septr] middleware error; failing open", err)
+      const headersSent = (res as unknown as { headersSent?: boolean }).headersSent
+      if (!headersSent) next()
+    }
+  }
+
+  function vibeShieldInner(req: Request, res: Response, next: NextFunction): void {
     const originalJson = res.json.bind(res)
     const originalSend = res.send.bind(res)
 
@@ -119,29 +149,35 @@ export function createSeptr(userConfig: SeptrConfig = {}): SeptrExpressMiddlewar
     // the response patches (after the handler set its headers), once per response.
     let headersChecked = false
     const checkHeaders = (): void => {
-      if (headersChecked || typeof res.getHeaders !== "function") return
+      if (headersChecked || config.securityHeaders === false) return
+      if (typeof res.getHeaders !== "function") return
       headersChecked = true
-      for (const d of detectMissingSecurityHeaders(res.getHeaders())) {
+      for (const d of guard.run("security_headers", () => detectMissingSecurityHeaders(res.getHeaders!()), [])) {
         emitEvent(d, config)
       }
     }
 
-    /** Skip response inspection for payloads over 1 MB. */
-const MAX_INSPECT_BYTES = 1_000_000
+    /** Response bodies over this many characters skip inspection entirely —
+     * scanning large payloads on every response is wasted work. Configurable
+     * via maxResponseScanBytes (default 1 MB). */
+    const maxInspectBytes = (): number =>
+      config.maxResponseScanBytes && config.maxResponseScanBytes > 0
+        ? config.maxResponseScanBytes
+        : 1_000_000
 
   res.json = function (body: unknown): void {
       const isPing = req.path === "/__septr_ping"
       checkHeaders()
       if (config.secrets && body) {
         const serialized = JSON.stringify(body)
-        if (serialized.length > MAX_INSPECT_BYTES) {
+        if (serialized.length > maxInspectBytes()) {
           originalJson(body)
           return
         }
-        const { cleaned, detections: stripDetections } = stripSensitiveData(body, config.stripFields)
+        const { cleaned, detections: stripDetections } = guard.run("secrets", () => stripSensitiveData(body, config.stripFields), { cleaned: body, detections: [] as DetectionEvent[] })
         if (!isPing) {
           for (const d of stripDetections) emitEvent(d, config)
-          if (config.aiRateLimit) {
+          if (config.aiRateLimit && hasRateLimitHint(serialized)) {
             const aiEvents = detectAIRateLimit(serialized, req.path, req.method)
             for (const d of aiEvents) emitEvent(d, config)
           }
@@ -160,14 +196,14 @@ const MAX_INSPECT_BYTES = 1_000_000
       checkHeaders()
       if (config.secrets && typeof body === "object" && body !== null) {
         const serialized = JSON.stringify(body)
-        if (serialized.length > MAX_INSPECT_BYTES) {
+        if (serialized.length > maxInspectBytes()) {
           originalSend(body)
           return
         }
-        const { cleaned, detections: stripDetections } = stripSensitiveData(body, config.stripFields)
+        const { cleaned, detections: stripDetections } = guard.run("secrets", () => stripSensitiveData(body, config.stripFields), { cleaned: body, detections: [] as DetectionEvent[] })
         if (!isPing) {
           for (const d of stripDetections) emitEvent(d, config)
-          if (config.aiRateLimit) {
+          if (config.aiRateLimit && hasRateLimitHint(serialized)) {
             const aiEvents = detectAIRateLimit(serialized, req.path, req.method)
             for (const d of aiEvents) emitEvent(d, config)
           }
@@ -177,14 +213,14 @@ const MAX_INSPECT_BYTES = 1_000_000
         }
         originalSend(cleaned)
       } else if (config.secrets && typeof body === "string") {
-        if (body.length > MAX_INSPECT_BYTES) {
+        if (body.length > maxInspectBytes()) {
           originalSend(body)
           return
         }
-        const secretDetections = detectSecrets(body, config.sensitivePatterns)
+        const secretDetections = guard.run("secrets", () => detectSecrets(body, config.sensitivePatterns), [] as DetectionEvent[])
         if (!isPing) {
           for (const d of secretDetections) emitEvent(d, config)
-          if (config.aiRateLimit) {
+          if (config.aiRateLimit && hasRateLimitHint(body)) {
             const aiEvents = detectAIRateLimit(body, req.path, req.method)
             for (const d of aiEvents) emitEvent(d, config)
           }
@@ -241,7 +277,7 @@ const MAX_INSPECT_BYTES = 1_000_000
 
     if (config.inputSanitize) {
       if (["POST", "PUT", "PATCH", "DELETE"].includes(req.method) && req.body) {
-        const { block, detections: sanitizeDetections } = sanitizeInput(req.body)
+        const { block, detections: sanitizeDetections } = guard.run("input_sanitize", () => sanitizeInput(req.body), { block: false, detections: [] as DetectionEvent[] })
         detections.push(...sanitizeDetections)
         for (const d of sanitizeDetections) emitEvent(d, config)
         if (block && config.strictMode) {
@@ -252,7 +288,8 @@ const MAX_INSPECT_BYTES = 1_000_000
     }
 
     if (config.inputSanitize && req.query) {
-      const { block, detections: qd } = sanitizeQuery(req.query)
+      const queryParams = req.query
+      const { block, detections: qd } = guard.run("input_sanitize", () => sanitizeQuery(queryParams), { block: false, detections: [] as DetectionEvent[] })
       detections.push(...qd)
       for (const d of qd) emitEvent(d, config)
       if (block && config.strictMode) {
@@ -262,7 +299,7 @@ const MAX_INSPECT_BYTES = 1_000_000
     }
 
     if (config.tamper && req.body && typeof req.body === "object" && ["POST", "PUT", "PATCH"].includes(req.method)) {
-      const tamperEvents = detectBusinessLogicTamper(req.body as Record<string, unknown>, config.fieldConstraints, req.path, req.method)
+      const tamperEvents = guard.run("tamper", () => detectBusinessLogicTamper(req.body as Record<string, unknown>, config.fieldConstraints, req.path, req.method), [] as DetectionEvent[])
       for (const d of tamperEvents) {
         detections.push(d)
         emitEvent(d, config)
@@ -282,7 +319,7 @@ const MAX_INSPECT_BYTES = 1_000_000
       const routeParamValues = template ? extractRouteParamValues(template, req.path) : undefined
       const bodyParams = req.body as Record<string, string> | undefined
 
-      const bolaEvent = detectBOLA(routeParams, bodyParams ?? null, tokenClaims, routeForEvent, req.method, routeParamValues)
+      const bolaEvent = guard.run("bola", () => detectBOLA(routeParams, bodyParams ?? null, tokenClaims, routeForEvent, req.method, routeParamValues), null)
       if (bolaEvent) {
         detections.push(bolaEvent)
         for (const d of detections) emitEvent(d, config)
@@ -314,7 +351,7 @@ const MAX_INSPECT_BYTES = 1_000_000
 
       const ssrfInput = ssrfInputs.join(" ")
       if (ssrfInput) {
-        const ssrfEvents = detectSSRF(ssrfInput)
+        const ssrfEvents = guard.run("ssrf", () => detectSSRF(ssrfInput), [] as DetectionEvent[])
         for (const d of ssrfEvents) {
           detections.push(d)
           emitEvent(d, config)
@@ -335,7 +372,7 @@ const MAX_INSPECT_BYTES = 1_000_000
 
       const piInput = piInputs.join(" ")
       if (piInput) {
-        const piEvents = detectPromptInjection(piInput)
+        const piEvents = guard.run("prompt_injection", () => detectPromptInjection(piInput), [] as DetectionEvent[])
         for (const d of piEvents) {
           detections.push(d)
           emitEvent(d, config)
@@ -360,7 +397,7 @@ const MAX_INSPECT_BYTES = 1_000_000
             if (typeof body === "string") {
               try {
                 const parsed = JSON.parse(body)
-                const leaks = detectCrossTenantLeaks(tenantId!, parsed, taConfig.tenantColumn)
+                const leaks = guard.run("tenant_aware", () => detectCrossTenantLeaks(tenantId!, parsed, taConfig.tenantColumn), [] as TenantLeak[])
                 if (leaks.length > 0) {
                   const ctEvent: DetectionEvent = {
                     type: "cross_tenant_leak",

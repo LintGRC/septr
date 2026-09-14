@@ -367,3 +367,260 @@ def test_create_septr_attaches_single_middleware():
     attached = [m for m in app.user_middleware if m.cls is SeptrASGIMiddleware]
     assert len(attached) == 1
     assert returned is app
+
+
+class _BodyApp:
+    """Returns a fixed body/content-type so response-scanning guards can be
+    exercised with payloads of controlled size and type."""
+
+    def __init__(self, body: bytes, content_type: str = "application/json"):
+        self.body = body
+        self.content_type = content_type
+
+    async def __call__(self, scope, receive, send):
+        await send({
+            "type": "http.response.start",
+            "status": 200,
+            "headers": [(b"content-type", self.content_type.encode())],
+        })
+        await send({"type": "http.response.body", "body": self.body})
+
+
+def _run_body(middleware, method, path):
+    scope = {
+        "type": "http",
+        "method": method,
+        "path": path,
+        "query_string": b"",
+        "headers": [(b"host", b"localhost")],
+        "server": ("127.0.0.1", 8000),
+        "client": ("127.0.0.1", 12345),
+        "scheme": "http",
+        "http_version": "1.1",
+    }
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def drive():
+        status = None
+        body = b""
+        headers: dict[str, str] = {}
+
+        async def send(msg):
+            nonlocal status, body, headers
+            if msg["type"] == "http.response.start":
+                status = msg["status"]
+                headers = {k.decode(): v.decode() for k, v in msg.get("headers", [])}
+            elif msg["type"] == "http.response.body":
+                body += msg.get("body", b"")
+
+        await middleware(scope, receive, send)
+        return status, body, headers
+
+    return asyncio.run(drive())
+
+
+def _run_body_with_spy(middleware, method, path):
+    events = []
+    orig = mod.emit_event
+
+    def spy(ev, cfg):
+        events.append(ev)
+        return orig(ev, cfg)
+
+    mod.emit_event = spy
+    try:
+        status, body, headers = _run_body(middleware, method, path)
+    finally:
+        mod.emit_event = orig
+    return status, body, headers, events
+
+
+def test_response_under_cap_is_stripped():
+    """Small JSON responses keep the original secret-stripping behavior."""
+    secret = "sk_live_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"
+    app = _BodyApp(json.dumps({"token": secret, "name": "John"}).encode())
+    mw = SeptrASGIMiddleware(app, {**BASE_CONFIG, "secrets": True})
+
+    status, body, _, events = _run_body_with_spy(mw, "GET", "/data")
+    assert status == 200
+    assert secret.encode() not in body
+    assert b"[REDACTED]" in body
+    assert any(e.type in ("secrets", "data_strip") for e in events)
+
+
+def test_large_response_body_is_not_scanned():
+    """Bodies over maxResponseScanBytes skip response scanning entirely —
+    scanning multi-MB payloads synchronously blocked the event loop."""
+    secret = "sk_live_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"
+    big = json.dumps({
+        "token": secret,
+        "error": "insufficient_quota",
+        "filler": "x" * 2048,
+    }).encode()
+    assert len(big) > 512
+    app = _BodyApp(big)
+    mw = SeptrASGIMiddleware(app, {
+        **BASE_CONFIG,
+        "secrets": True,
+        "aiRateLimit": True,
+        "maxResponseScanBytes": 512,
+    })
+
+    status, body, headers, events = _run_body_with_spy(mw, "GET", "/api/briefings")
+    assert status == 200
+    assert body == big, "oversized body must pass through untouched"
+    assert headers.get("x-septr-stripped") is None
+    assert not any(e.type in ("secrets", "ai_rate_limit") for e in events)
+
+
+def test_non_json_response_is_not_scanned():
+    """Non-JSON responses skip the JSON-only response pipeline."""
+    secret = "sk_live_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"
+    raw = f"token={secret}".encode()
+    app = _BodyApp(raw, content_type="text/plain")
+    mw = SeptrASGIMiddleware(app, {**BASE_CONFIG, "secrets": True})
+
+    status, body, headers, events = _run_body_with_spy(mw, "GET", "/data")
+    assert status == 200
+    assert body == raw
+    assert headers.get("x-septr-stripped") is None
+    assert not any(e.type == "secrets" for e in events)
+
+
+def test_ai_rate_limit_detected_on_any_route_with_hint():
+    """The cheap prefilter keeps AI-provider errors detectable on routes that
+    aren't named /api/chat etc. (e.g. /api/briefings/generate)."""
+    app = _BodyApp(json.dumps({"error": "You exceeded your current quota"}).encode())
+    mw = SeptrASGIMiddleware(app, {**BASE_CONFIG, "aiRateLimit": True})
+
+    _, _, _, events = _run_body_with_spy(mw, "GET", "/api/briefings/generate")
+    assert any(e.type == "ai_rate_limit" for e in events)
+
+
+def test_ai_rate_limit_skipped_without_hint():
+    """Bodies with no rate-limit/quota markers never run the regex set."""
+    app = _BodyApp(json.dumps({"report": "quarterly numbers", "total": 42}).encode())
+    mw = SeptrASGIMiddleware(app, {**BASE_CONFIG, "aiRateLimit": True})
+
+    _, _, _, events = _run_body_with_spy(mw, "GET", "/api/reports")
+    assert not any(e.type == "ai_rate_limit" for e in events)
+
+
+def _run_with_body(middleware, method, path, body: bytes):
+    scope = {
+        "type": "http",
+        "method": method,
+        "path": path,
+        "query_string": b"",
+        "headers": [
+            (b"host", b"localhost"),
+            (b"content-type", b"application/json"),
+            (b"content-length", str(len(body)).encode()),
+        ],
+        "server": ("127.0.0.1", 8000),
+        "client": ("127.0.0.1", 12345),
+        "scheme": "http",
+        "http_version": "1.1",
+    }
+
+    async def receive():
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    async def drive():
+        status = None
+        out = b""
+
+        async def send(msg):
+            nonlocal status, out
+            if msg["type"] == "http.response.start":
+                status = msg["status"]
+            elif msg["type"] == "http.response.body":
+                out += msg.get("body", b"")
+
+        await middleware(scope, receive, send)
+        return status, out
+
+    return asyncio.run(drive())
+
+
+class _EchoBodyApp:
+    """Reads the (replayed) request body and reports its size."""
+
+    async def __call__(self, scope, receive, send):
+        total = 0
+        while True:
+            msg = await receive()
+            if msg["type"] != "http.request":
+                break
+            total += len(msg.get("body", b""))
+            if not msg.get("more_body", False):
+                break
+        payload = json.dumps({"received_bytes": total}).encode()
+        await send({
+            "type": "http.response.start",
+            "status": 200,
+            "headers": [(b"content-type", b"application/json")],
+        })
+        await send({"type": "http.response.body", "body": payload})
+
+
+def test_kill_switch_bypasses_all_engines():
+    mw = SeptrASGIMiddleware(OkApp(), {**BASE_CONFIG, "missingAuth": True, "disabled": True})
+    status, events = _run_with_spy(mw, "GET", "/private")
+    assert status == 200
+    assert events == []
+
+
+def test_pipeline_error_fails_open():
+    # excludePaths=None makes the pipeline itself raise before the app runs.
+    mw = SeptrASGIMiddleware(OkApp(), {**BASE_CONFIG, "excludePaths": None})
+    status, _ = _run_with_spy(mw, "GET", "/data")
+    assert status == 200
+
+
+def test_engine_exception_fails_open():
+    app = _BodyApp(json.dumps({"token": "sk_live_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"}).encode())
+    orig = mod.strip_sensitive_data
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("engine bug")
+
+    mod.strip_sensitive_data = boom
+    try:
+        mw = SeptrASGIMiddleware(app, {**BASE_CONFIG, "secrets": True, "engineFailureThreshold": 1})
+        status, body, _, _ = _run_body_with_spy(mw, "GET", "/data")
+    finally:
+        mod.strip_sensitive_data = orig
+    assert status == 200
+    assert body, "app response must be delivered when an engine fails"
+
+
+def test_small_request_body_is_inspected_and_blocked():
+    mw = SeptrASGIMiddleware(_EchoBodyApp(), {
+        **BASE_CONFIG, "inputSanitize": True, "strictMode": True,
+    })
+    status, _ = _run_with_body(mw, "POST", "/data", json.dumps({"q": "1' OR '1'='1"}).encode())
+    assert status == 400
+
+
+def test_large_request_body_is_not_inspected_but_reaches_app():
+    body = json.dumps({"q": "1' OR '1'='1", "filler": "x" * 512}).encode()
+    mw = SeptrASGIMiddleware(_EchoBodyApp(), {
+        **BASE_CONFIG, "inputSanitize": True, "strictMode": True,
+        "maxRequestInspectBytes": 64,
+    })
+    status, out = _run_with_body(mw, "POST", "/data", body)
+    assert status == 200, "oversized bodies must pass through untouched"
+    assert json.loads(out)["received_bytes"] == len(body)
+
+
+def test_security_headers_advisory_can_be_disabled():
+    """Apps that manage their own security headers (or rely on an edge proxy)
+    can switch off the advisory — the SDK's response interception runs before
+    inner header middleware, so it would otherwise report false gaps."""
+    mw = SeptrASGIMiddleware(OkApp(), {**BASE_CONFIG, "securityHeaders": False})
+    status, events = _run_with_spy(mw, "GET", "/api/data")
+    assert status == 200
+    assert all(e.type != "security_headers" for e in events)

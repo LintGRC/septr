@@ -51,6 +51,18 @@ type Config struct {
 	FieldConstraints  []FieldConstraint  `json:"fieldConstraints,omitempty"`
 	TenantAware       *TenantAwareConfig `json:"tenantAware,omitempty"`
 
+	// SecurityHeaders enables the advisory that reports responses missing
+	// standard security headers (default true). Disable when another layer
+	// (app middleware or edge proxy) manages the headers.
+	SecurityHeaders *bool `json:"securityHeaders,omitempty"`
+
+	// MaxResponseScanBytes caps response-body scanning (default 256 KiB).
+	MaxResponseScanBytes int `json:"maxResponseScanBytes,omitempty"`
+
+	// MaxRequestInspectBytes caps request-body inspection (default 256 KiB);
+	// larger bodies stream through untouched.
+	MaxRequestInspectBytes int `json:"maxRequestInspectBytes,omitempty"`
+
 	// framework is set by adapters (gin/nethttp) and reported to the backend
 	// as the runtime in the startup handshake. Not part of the remote config.
 	framework string
@@ -121,6 +133,25 @@ func (c *Config) MissingAuthEnabled() bool     { return c.defaultBool(c.MissingA
 func (c *Config) TamperEnabled() bool          { return c.defaultBool(c.Tamper, true) }
 func (c *Config) AIRateLimitEnabled() bool     { return c.defaultBool(c.AIRateLimit, true) }
 func (c *Config) TelemetryEnabled() bool       { return c.defaultBool(c.Telemetry, true) }
+func (c *Config) SecurityHeadersEnabled() bool { return c.defaultBool(c.SecurityHeaders, true) }
+
+// ResponseScanMaxBytes caps response-body scanning. Values <= 0 fall back to
+// the default so a misconfiguration cannot re-enable unbounded scanning.
+func (c *Config) ResponseScanMaxBytes() int {
+	if c.MaxResponseScanBytes > 0 {
+		return c.MaxResponseScanBytes
+	}
+	return defaultMaxResponseScanBytes
+}
+
+// RequestInspectMaxBytes caps request-body inspection. Values <= 0 fall back
+// to the default so a misconfiguration cannot re-enable unbounded reads.
+func (c *Config) RequestInspectMaxBytes() int {
+	if c.MaxRequestInspectBytes > 0 {
+		return c.MaxRequestInspectBytes
+	}
+	return defaultMaxResponseScanBytes
+}
 
 func nowMs() float64 {
 	return float64(time.Now().UnixNano()) / 1e6

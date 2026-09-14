@@ -219,9 +219,9 @@ func DetectHighEntropySecrets(input string) []DetectionEvent {
 		}
 		events = append(events, DetectionEvent{
 			Type: "secret_exposure", Severity: "medium",
-			PatternID: "secret_high_entropy",
+			PatternID:   "secret_high_entropy",
 			Description: "High-entropy value assigned to a secret-like key (possible API key or token)",
-			StatusCode: 200, Timestamp: nowMs(),
+			StatusCode:  200, Timestamp: nowMs(),
 		})
 	}
 	return events
