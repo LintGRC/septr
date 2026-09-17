@@ -1,3 +1,10 @@
+## 0.1.27 — 2026-09-17
+
+### Added — `septr scan <url>`
+- **JS bundle scanning.** The CLI URL mode now fetches up to 30 `<script src>` bundles (10 MB cap each) and runs the secret/injection engines on them — the same leak detection the web app applies to frontend JavaScript.
+- **Manifest scanning.** Fetches `/package.json` and `/requirements.txt` and scans them for accidentally committed keys or tokens.
+- **Security header checks.** Missing HSTS, CSP, X-Frame-Options, and X-Content-Type-Options are now reported as findings in URL mode (previously only checked by `septr audit`).
+
 ## 0.1.26 — 2026-09-17
 
 ### Fixed — `septr scan`
