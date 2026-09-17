@@ -1,3 +1,25 @@
+## 0.1.26 — 2026-09-17
+
+### Fixed — `septr scan`
+- **Vibe-code file types were silently skipped.** `.vue`, `.svelte`, `.astro`,
+  `.mdx`, `.prisma`, `Dockerfile`, `Makefile`, `.php`, `.java`, `.kt`, `.cs`,
+  `.scss`, `.graphql`, `.tf`, `.ps1` and more were never scanned, so a leaked
+  secret in one of them still printed `0 finding(s)`. All are scanned now,
+  along with hidden credential files (`.npmrc`, `.pypirc`, `.netrc`,
+  `.htpasswd`, `.git-credentials`, `.envrc`, `.flaskenv`).
+- **Default ignores did not match at the scan root.** `fixtures/**`,
+  `*-payloads.*` and `__tests__/benchmark/**` were only ignored when nested,
+  so scanning a project root flagged its own test payloads. A leading `**/`
+  now matches zero or more directories.
+- **Nested `.septrignore` files were invisible to parent-directory scans.**
+  They now apply to their own subtree (re-anchored to the scan root), so a
+  monorepo scan respects the exclusions committed in vendored packages, and
+  the Python/Go/catalog packages in this repo now ship their own.
+- **The summary hid what was skipped.** `septr scan` now prints
+  `skipped: N dependency/build dir(s), N hidden, N non-source file(s)` and
+  `--json` exposes `skipped: { dirs, hidden, nonText }`, so the scanned-file
+  count can be reconciled with the project.
+
 ## 0.1.25 — 2026-09-17
 
 ### Fixed — CLI
