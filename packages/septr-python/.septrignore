@@ -1,0 +1,17 @@
+# Septr's own Python SDK contains intentional attack payloads used to:
+#   - self-test adapters (septr/adapters/*.py verify blocks)
+#   - define detection patterns (septr/core/sanitize.py, ssrf.py, secrets.py)
+#   - exercise the detectors with real attack payloads (tests/)
+# These are NOT vulnerabilities — excluding them is intentional.
+
+# Test files exercise the detectors with real attack payloads
+tests/
+
+# Detection pattern definitions — the attack strings ARE the product here
+septr/core/sanitize.py
+septr/core/ssrf.py
+septr/core/secrets.py
+
+# Adapters embed self-test payloads inline
+septr/adapters/fastapi.py
+septr/adapters/flask.py

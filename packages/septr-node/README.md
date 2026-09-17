@@ -97,7 +97,7 @@ npx septr scan . --json    # machine-readable findings
 npx septr scan . --exclude "src/__tests__/**"   # skip paths (repeatable)
 ```
 
-Exclude paths with a committed `.septrignore` file (gitignore-style patterns) in your project root — exclusions are explicit and auditable. Test fixture payloads (`__tests__/benchmark/**`, `*-payloads.*`, `fixtures/**`) are skipped by default; everything else, including tests, is scanned.
+Exclude paths with a committed `.septrignore` file (gitignore-style patterns, anchored to the directory it lives in; nested files are honored when scanning a parent directory) — exclusions are explicit and auditable. Test fixture payloads (`__tests__/benchmark/**`, `*-payloads.*`, `fixtures/**`, at any depth) are skipped by default; everything else, including tests, is scanned. The summary line separates files scanned, files ignored by rules, and entries skipped entirely (dependency/build dirs, hidden files, non-source files).
 
 ## Environment variables
 

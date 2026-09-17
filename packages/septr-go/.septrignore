@@ -1,0 +1,19 @@
+# Septr's own Go SDK contains intentional attack payloads used to:
+#   - self-test the engine (selftest.go, *_test.go)
+#   - define detection patterns (ssrf.go, sanitize.go)
+#   - exercise adapters with real attack payloads (gin.go, nethttp.go)
+# These are NOT vulnerabilities — excluding them is intentional.
+
+# Tests exercise the detectors with real attack payloads
+**/*_test.go
+
+# Self-test engine: fires every detector with representative payloads
+selftest.go
+
+# Detection pattern definitions — the attack strings ARE the product here
+ssrf.go
+sanitize.go
+
+# Adapters embed self-test payloads inline
+gin.go
+nethttp.go

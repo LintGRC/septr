@@ -109,3 +109,56 @@ test("vibe-code file types are scanned, not silently skipped", () => {
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test("default ignores match at the scan root too (fixtures, payloads, benchmark)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "septr-rootignore-"))
+  try {
+    mkdirSync(join(dir, "fixtures"), { recursive: true })
+    mkdirSync(join(dir, "__tests__", "benchmark"), { recursive: true })
+    writeFileSync(join(dir, "fixtures", "leak.ts"), `const k = "${STRIPE_FIXTURE}"\n`)
+    writeFileSync(join(dir, "xss-payloads.ts"), `const k = "${STRIPE_FIXTURE}"\n`)
+    writeFileSync(join(dir, "__tests__", "benchmark", "p.ts"), `const k = "${STRIPE_FIXTURE}"\n`)
+    writeFileSync(join(dir, "app.ts"), `const k = "${STRIPE_FIXTURE}"\n`)
+    const r = scanDir(dir)
+    const scanned = [...new Set(r.findings.map((f) => f.file))]
+    assert.deepEqual(scanned, ["app.ts"])
+    assert.equal(r.ignoredFiles, 3)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("nested .septrignore files are honored when scanning a parent directory", () => {
+  const dir = mkdtempSync(join(tmpdir(), "septr-nested-ignore-"))
+  try {
+    const pkg = join(dir, "packages", "thing")
+    mkdirSync(join(pkg, "src"), { recursive: true })
+    mkdirSync(join(pkg, "tests"), { recursive: true })
+    writeFileSync(join(pkg, ".septrignore"), "src/secret-holder.ts\ntests/\n")
+    writeFileSync(join(pkg, "src", "secret-holder.ts"), `const k = "${STRIPE_FIXTURE}"\n`)
+    writeFileSync(join(pkg, "tests", "t.ts"), `const k = "${STRIPE_FIXTURE}"\n`)
+    writeFileSync(join(pkg, "src", "app.ts"), `const k = "${STRIPE_FIXTURE}"\n`)
+    const r = scanDir(dir)
+    const scanned = [...new Set(r.findings.map((f) => f.file))]
+    assert.deepEqual(scanned, ["packages/thing/src/app.ts"])
+    assert.equal(r.ignoredFiles, 2)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("skipped counts account for silent skips (build dirs, hidden, non-source)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "septr-skipped-"))
+  try {
+    mkdirSync(join(dir, "node_modules", "dep"), { recursive: true })
+    writeFileSync(join(dir, "node_modules", "dep", "index.ts"), "const a = 1\n")
+    writeFileSync(join(dir, ".eslintrc"), "{}\n")
+    writeFileSync(join(dir, "logo.png"), "not really a png\n")
+    writeFileSync(join(dir, "app.ts"), "const a = 1\n")
+    const r = scanDir(dir)
+    assert.equal(r.files, 1)
+    assert.deepEqual(r.skipped, { dirs: 1, hidden: 1, nonText: 1 })
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

@@ -83,7 +83,7 @@ create_septr_flask(app, {"apiKey": os.getenv("SEPTR_API_KEY")})
 
 - `SEPTR_API_KEY` — your project key
 - `SEPTR_TELEMETRY_URL` — override the telemetry endpoint
-  (e.g. `http://127.0.0.1:8000/v1/events` for a local backend)
+  (e.g. your local backend's `/v1/events` endpoint for development)
 - `SEPTR_HEARTBEAT_INTERVAL_MS` — heartbeat cadence in ms (default `60000`;
   set `0` to disable heartbeats)
 - `SEPTR_ENV` — environment label sent with events (default `production`)

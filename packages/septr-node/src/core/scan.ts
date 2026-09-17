@@ -38,6 +38,9 @@ function globToRegExp(pattern: string): RegExp {
     .split("**").join("\u0000")
     .split("*").join("[^/]*")
     .split("\u0000").join(".*")
+  // A leading `**/` matches zero or more directories, so `**/fixtures/**`
+  // also matches a top-level `fixtures/` at the scan root.
+  out = out.replace(/^\.\*\//, "(?:.*/)?")
   out = out.replace(/\/$/, "(?:/.*)?$")
   return new RegExp(`^${out}$`)
 }
@@ -122,12 +125,24 @@ export interface Hygiene {
   curlPipe: boolean
 }
 
+/** Entries deliberately not scanned. Reported so the summary explains why
+ *  the scanned-file count is often far below the project's actual file count. */
+export interface ScanSkipped {
+  /** Dependency/build/vendor directories pruned whole (node_modules, .git, dist, ...). */
+  dirs: number
+  /** Hidden files/dirs, except `.env*` and credential dotfiles. */
+  hidden: number
+  /** Files with extensions Septr does not scan (images, binaries, ...). */
+  nonText: number
+}
+
 export interface ScanResult {
   files: number
   findings: ScanFinding[]
   hygiene: Hygiene
   specifiers?: string[]
   ignoredFiles: number
+  skipped: ScanSkipped
 }
 
 function redact(value: string): string {
@@ -190,6 +205,7 @@ export function scanDir(root: string, extraIgnore: string[] = []): ScanResult {
   let files = 0
   let ignoredFiles = 0
   let rootGitignore = false
+  const skipped: ScanSkipped = { dirs: 0, hidden: 0, nonText: 0 }
   const allSpecifiers: string[] = []
   const seenSpecs = new Set<string>()
   const ignorePatterns = [...DEFAULT_IGNORE_PATTERNS, ...readIgnoreFile(root), ...extraIgnore]
@@ -201,13 +217,27 @@ export function scanDir(root: string, extraIgnore: string[] = []): ScanResult {
     } catch {
       return
     }
+    // A `.septrignore` applies to its own directory subtree. Patterns are
+    // re-anchored to the scan root so scanning a parent directory respects
+    // the ignore rules committed in nested packages.
+    const scopedPatterns: string[] = []
+    if (dir !== root && entries.includes(".septrignore")) {
+      const base = relative(root, dir).split(sep).join("/")
+      for (const pattern of readIgnoreFile(dir)) {
+        const p = pattern.startsWith("/") ? pattern.slice(1) : pattern
+        scopedPatterns.push(`${base}/${p}`)
+      }
+      ignorePatterns.push(...scopedPatterns)
+    }
     for (const entry of entries) {
       const full = join(dir, entry)
       if (dir === root && entry === ".gitignore") {
         rootGitignore = true
+        skipped.hidden += 1
         continue
       }
       if (entry.startsWith(".") && entry !== ".env" && !entry.startsWith(".env.") && !HIDDEN_TEXT_FILES.has(entry)) {
+        skipped.hidden += 1
         continue
       }
       let st: ReturnType<typeof statSync>
@@ -218,8 +248,10 @@ export function scanDir(root: string, extraIgnore: string[] = []): ScanResult {
       }
       const rel = relative(root, full).split(sep).join("/")
       if (st.isDirectory()) {
-        if (IGNORE_DIRS.has(entry)) continue
-        if (isGoModCache(dir, entry)) continue
+        if (IGNORE_DIRS.has(entry) || isGoModCache(dir, entry)) {
+          skipped.dirs += 1
+          continue
+        }
         if (isIgnored(rel + "/", ignorePatterns)) {
           ignoredFiles += 1
           continue
@@ -236,7 +268,10 @@ export function scanDir(root: string, extraIgnore: string[] = []): ScanResult {
         continue
       }
       if (entry === ".env" || entry.startsWith(".env.")) hygiene.envCommitted = true
-      if (!isTextish(entry)) continue
+      if (!isTextish(entry)) {
+        skipped.nonText += 1
+        continue
+      }
       let text: string
       try {
         text = readFileSync(full, "utf-8")
@@ -255,11 +290,12 @@ export function scanDir(root: string, extraIgnore: string[] = []): ScanResult {
         }
       }
     }
+    if (scopedPatterns.length > 0) ignorePatterns.length -= scopedPatterns.length
   }
 
   walk(root)
   hygiene.gitignoreMissing = !rootGitignore
-  return { files, findings, hygiene, specifiers: allSpecifiers, ignoredFiles }
+  return { files, findings, hygiene, specifiers: allSpecifiers, ignoredFiles, skipped }
 }
 
 /** Like scanDir, but also checks import specifiers against the npm registry

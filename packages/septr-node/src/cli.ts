@@ -871,7 +871,7 @@ async function runScan(argv: string[]): Promise<void> {
   } else {
     const result = await scanDirAsync(resolve(opts.target), opts.exclude)
     findings = result.findings
-    extra = { files: result.files, hygiene: result.hygiene, ignored: result.ignoredFiles }
+    extra = { files: result.files, hygiene: result.hygiene, ignored: result.ignoredFiles, skipped: result.skipped }
   }
 
   if (opts.report || opts.attachProject) {
@@ -993,6 +993,12 @@ async function runScan(argv: string[]): Promise<void> {
       }
     } else {
       console.log(`septr scan: ${String(extra.files)} files, ${findings.length} finding(s)${extra.ignored ? `, ${String(extra.ignored)} ignored` : ""}`)
+      const skipped = extra.skipped as { dirs?: number; hidden?: number; nonText?: number } | undefined
+      const skippedParts: string[] = []
+      if (skipped?.dirs) skippedParts.push(`${skipped.dirs} dependency/build dir(s)`)
+      if (skipped?.hidden) skippedParts.push(`${skipped.hidden} hidden`)
+      if (skipped?.nonText) skippedParts.push(`${skipped.nonText} non-source file(s)`)
+      if (skippedParts.length > 0) console.log(`  skipped: ${skippedParts.join(", ")}`)
       const hygiene = extra.hygiene as Record<string, unknown> | undefined
       if (hygiene?.gitignoreMissing) console.log("  hygiene: no root .gitignore (low)")
       if (hygiene?.envCommitted) console.log("  hygiene: committed .env file present (low — inspect contents)")

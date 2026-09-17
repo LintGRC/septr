@@ -1,0 +1,2 @@
+# Probe-path catalog: URL paths that intentionally look like attack strings.
+probe-paths.json

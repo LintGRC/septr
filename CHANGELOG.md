@@ -6,9 +6,9 @@
   — the reporter swallowed every error. It now prints `Results reported.` or
   a warning with the reason, e.g.
   `HTTP 401 from https://app.septr.dev — check the API key`.
-- **`test` / `audit` defaulted to a local backend.** `--api-url` defaulted to
-  `http://localhost:8000` (the dev stack), so results from real machines went
-  nowhere. Default is now `https://app.septr.dev`, matching `scan --attach`.
+- **`test` / `audit` defaulted to a local backend.** `--api-url` pointed at the
+  local dev server, so results from real machines went nowhere. Default is now
+  `https://app.septr.dev`, matching `scan --attach`.
 - **`septr --version` was stuck at 0.1.0.** The CLI hardcoded the string while
   the build already injects the real version; top-level `septr --version` also
   failed with `Unknown command`. Both now print the package version.
