@@ -1,6 +1,39 @@
+## 0.1.25 — 2026-09-17
+
+### Fixed — CLI
+- **Reporting failures were invisible.** `septr test` / `septr audit` printed
+  `Done!` even when the backend rejected the results (expired key, wrong URL)
+  — the reporter swallowed every error. It now prints `Results reported.` or
+  a warning with the reason, e.g.
+  `HTTP 401 from https://app.septr.dev — check the API key`.
+- **`test` / `audit` defaulted to a local backend.** `--api-url` defaulted to
+  `http://localhost:8000` (the dev stack), so results from real machines went
+  nowhere. Default is now `https://app.septr.dev`, matching `scan --attach`.
+- **`septr --version` was stuck at 0.1.0.** The CLI hardcoded the string while
+  the build already injects the real version; top-level `septr --version` also
+  failed with `Unknown command`. Both now print the package version.
+- **The SQL injection probe never ran.** It was defined as a GET with a JSON
+  body, which `fetch` rejects — every run reported `sqli: FAIL` regardless of
+  the target. The payload now travels in the query string.
+- **404/405 counted as protection.** `septr test` treated any 4xx/5xx as
+  blocked, so a missing route produced a false `PASS`. Missing routes are now
+  `SKIPPED` (inconclusive) and excluded from the pass count; the command exits
+  1 only on real failures.
+- **Debug-mode check flagged SPAs.** Any HTML response on `/__septr_debug`
+  (a catch-all route) was reported as a HIGH exposed debug endpoint. HTML
+  responses now pass; only non-HTML responses fail.
+
+### Changed — CLI
+- **`--key` is optional for `test` and `audit`.** Checks run locally and print
+  results without a key; providing one records them in the dashboard.
+- **`audit` score ignores checks that couldn't run.** DB checks without
+  `--db-url` (or without `psql`) are labeled `[NOT RUN]` and excluded from the
+  score instead of counting as failures — a clean app no longer caps at ~58%
+  (grade F) because optional input was missing.
+
 # Changelog
 
-## 0.1.24 — unreleased
+## 0.1.24
 
 ### Fixed
 - **Response scanning could block the host app.** The FastAPI adapter scanned
