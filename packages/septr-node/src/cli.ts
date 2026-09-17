@@ -5,7 +5,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs"
 import path from "node:path"
 import { resolve } from "node:path"
 import { scanDirAsync, type ScanFinding } from "./core/scan"
-import { canonicalCheckId } from "./core/check-ids"
+import { canonicalFinding } from "./core/check-ids"
 import { probeUrl, type ProbeFinding } from "./core/probe"
 
 const VERSION = typeof __SEPTR_VERSION__ === "undefined" ? "0.1.0" : __SEPTR_VERSION__
@@ -879,12 +879,26 @@ async function runScan(argv: string[]): Promise<void> {
       url: opts.target,
       findings: findings.map((f) => {
         const path = "path" in f ? f.path : f.file
-        const checkId = canonicalCheckId(f.patternId, path)
+        const canonical = canonicalFinding(f.patternId, path)
+        let name = canonical.name ?? f.description ?? f.patternId
+        let severity = canonical.severity ?? f.severity
+        // Probe findings: name/rate like the web scanner so attach reconciles
+        // with dashboard incidents instead of duplicating them.
+        if (canonical.checkId === "exposed_file") {
+          name = `Sensitive file exposed: ${path}`
+          severity = "high"
+        } else if (canonical.checkId === "exposed_env") {
+          const liveSecret = findings.some(
+            (g) => g.patternId.startsWith("secret_") && "file" in g && g.file === path,
+          )
+          name = liveSecret ? `Live secret exposed in ${path}` : `Sensitive file exposed: ${path}`
+          severity = liveSecret ? "critical" : "medium"
+        }
         return {
-          check_id: checkId,
-          name: f.description || f.patternId,
-          severity: f.severity,
-          fix_prompt: f.description || `Review ${checkId}`,
+          check_id: canonical.checkId,
+          name,
+          severity,
+          fix_prompt: f.description || `Review ${canonical.checkId}`,
           preview: f.preview?.slice(0, 200) ?? "",
           source: "path" in f ? "probe" : "engine",
         }

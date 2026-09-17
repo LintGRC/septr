@@ -122,27 +122,32 @@ function scriptSrcUrls(html: string, base: string): string[] {
   return urls
 }
 
+/** Missing-header checks, labeled and rated to match the web scanner
+ *  (backend/scanner/checks.py SECURITY_HEADERS) so CLI-attached incidents
+ *  reconcile 1:1 with dashboard scans. */
+const SECURITY_HEADER_CHECKS: Array<[string, string, string]> = [
+  ["Content-Security-Policy", "Content-Security-Policy header missing", "medium"],
+  ["Strict-Transport-Security", "HSTS header missing", "medium"],
+  ["X-Content-Type-Options", "X-Content-Type-Options header missing", "medium"],
+  ["X-Frame-Options", "X-Frame-Options header missing", "medium"],
+  ["Referrer-Policy", "Referrer-Policy header missing", "low"],
+]
+
 function checkSecurityHeaders(headers: Headers): ProbeFinding[] {
   const findings: ProbeFinding[] = []
-  const missing: string[] = []
-  const hsts = headers.get("strict-transport-security")
-  const csp = headers.get("content-security-policy")
-  const xcto = headers.get("x-content-type-options")
-  const xfo = headers.get("x-frame-options")
-  if (!hsts) missing.push("Strict-Transport-Security (HSTS)")
-  if (!csp) missing.push("Content-Security-Policy")
-  if (!xfo && !csp) missing.push("X-Frame-Options / CSP frame-ancestors (clickjack protection)")
-  if (!xcto) missing.push("X-Content-Type-Options: nosniff")
-  if (missing.length === 0) return findings
-  const severity = missing.some((h) => h.includes("HSTS")) ? "high" : "medium"
-  findings.push({
-    patternId: "security_headers",
-    path: "/",
-    status: 200,
-    severity,
-    description: `Missing security headers: ${missing.join(", ")}`,
-    preview: `Missing: ${missing.join("; ")}`,
-  })
+  const csp = (headers.get("content-security-policy") || "").toLowerCase()
+  for (const [name, label, severity] of SECURITY_HEADER_CHECKS) {
+    if (headers.get(name)) continue
+    if (name === "X-Frame-Options" && csp.includes("frame-ancestors")) continue
+    findings.push({
+      patternId: "missing_header",
+      path: "/",
+      status: 200,
+      severity,
+      description: label,
+      preview: "Header not set",
+    })
+  }
   return findings
 }
 

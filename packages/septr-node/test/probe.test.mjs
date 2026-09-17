@@ -84,7 +84,7 @@ test("probe on a clean server finds nothing (except security headers)", async ()
   const { server, port } = await startServer(CLEAN_ROUTES)
   try {
     const r = await probeUrl(`http://127.0.0.1:${port}`, { timeoutMs: 2000, concurrency: 4 })
-    const probeFindings = r.findings.filter((f) => f.patternId !== "security_headers")
+    const probeFindings = r.findings.filter((f) => f.patternId !== "missing_header")
     assert.equal(probeFindings.length, 0)
   } finally {
     server.close()
@@ -100,7 +100,7 @@ test("200-on-everything server without matching content produces no findings (ex
   })
   try {
     const r = await probeUrl(`http://127.0.0.1:${port}`, { timeoutMs: 2000, concurrency: 4 })
-    const probeFindings = r.findings.filter((f) => f.patternId !== "security_headers")
+    const probeFindings = r.findings.filter((f) => f.patternId !== "missing_header")
     assert.equal(probeFindings.length, 0)
   } finally {
     server.close()
@@ -128,15 +128,21 @@ test("probe detects leaked secrets inside JS bundles", async () => {
   }
 })
 
-test("probe detects missing security headers", async () => {
+test("probe detects missing security headers with canonical labels", async () => {
   const { server, port } = await startServer({
     "/": { body: '<html><body>app</body></html>' },
   })
   try {
     const r = await probeUrl(`http://127.0.0.1:${port}`, { timeoutMs: 2000, concurrency: 4 })
-    const headerFindings = r.findings.filter((f) => f.patternId === "security_headers")
-    assert.ok(headerFindings.length > 0, "missing security headers flagged")
-    assert.ok(headerFindings[0].description.includes("Strict-Transport-Security"), "HSTS missing")
+    const headerFindings = r.findings.filter((f) => f.patternId === "missing_header")
+    const labels = headerFindings.map((f) => f.description)
+    assert.deepEqual(labels.sort(), [
+      "Content-Security-Policy header missing",
+      "HSTS header missing",
+      "Referrer-Policy header missing",
+      "X-Content-Type-Options header missing",
+      "X-Frame-Options header missing",
+    ].sort())
   } finally {
     server.close()
   }
