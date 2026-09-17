@@ -8,7 +8,10 @@ import { scanDirAsync, type ScanFinding } from "./core/scan"
 import { canonicalCheckId } from "./core/check-ids"
 import { probeUrl, type ProbeFinding } from "./core/probe"
 
-const ATTACKS: Array<{
+const VERSION = typeof __SEPTR_VERSION__ === "undefined" ? "0.1.0" : __SEPTR_VERSION__
+const DEFAULT_API_URL = "https://app.septr.dev"
+
+export const ATTACKS: Array<{
   engine: string
   method: string
   path: string
@@ -22,10 +25,10 @@ const ATTACKS: Array<{
     body: { api_key: "sk_test_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZabcd" },
   },
   {
+    // GET: payload goes in the query string — fetch rejects GET requests with a body.
     engine: "sqli",
     method: "GET",
-    path: "/",
-    body: { q: "1' OR '1'='1" },
+    path: "/?q=" + encodeURIComponent("1' OR '1'='1"),
   },
   {
     engine: "xss",
@@ -58,6 +61,17 @@ interface TestResult {
   passed: boolean
   statusCode: number | null
   error?: string
+  /** Route doesn't exist (404/405) — the attack never reached an engine, so
+   *  the result says nothing about protection. Must not count as a pass. */
+  inconclusive?: boolean
+}
+
+/** 4xx/5xx = blocked; 404/405 = route missing (inconclusive); X-Septr-Stripped
+ *  = engine detected and stripped the payload. Exported for tests. */
+export function evaluateAttackStatus(status: number, stripped: string | null): { passed: boolean; inconclusive: boolean } {
+  const routeMissing = status === 404 || status === 405
+  const blocked = status >= 400 && !routeMissing
+  return { passed: blocked || stripped !== null, inconclusive: routeMissing && stripped === null }
 }
 
 interface AuditFinding {
@@ -68,15 +82,18 @@ interface AuditFinding {
   fix: string
   owasp?: string
   cwe?: string
+  /** Check couldn't run (no --db-url, no psql, missing flag). Not a failure —
+   *  excluded from the score so "not checked" never reads as "insecure". */
+  skipped?: boolean
 }
 
 function showHelp(): void {
-  console.log("Septr Security CLI")
+  console.log(`Septr Security CLI v${VERSION}`)
   console.log()
   console.log("Usage:")
   console.log("  septr scan  [dir|url] [--json] [--fail-on high|medium|critical] [--quiet]")
-  console.log("  septr test  --url <url> --key <key> [--api-url <url>]")
-  console.log("  septr audit --url <url> --key <key> [--api-url <url>] [--db-url <url>]")
+  console.log("  septr test  [--url <url>] [--key <key>] [--api-url <url>]")
+  console.log("  septr audit [--url <url>] [--key <key>] [--api-url <url>] [--db-url <url>]")
   console.log()
   console.log("Commands:")
   console.log("  scan    Scan a directory for secrets, injection, SSRF — or probe a deployed app")
@@ -95,13 +112,14 @@ function showHelp(): void {
   console.log()
   console.log("Test/Audit options:")
   console.log("  --url       Your app's URL (default: http://localhost:3000)")
-  console.log("  --key       Your Septr API key (required)")
-  console.log("  --api-url   Backend API URL for reporting (default: http://localhost:8000)")
+  console.log("  --key       Your Septr API key (optional — without it results stay local)")
+  console.log("  --api-url   Backend API URL for reporting (default: https://app.septr.dev)")
   console.log("  --db-url    Postgres connection string for RLS audit (optional)")
   console.log("  --tenant-column  Multi-tenant column name for RLS detection (optional)")
   console.log("  --fix           Only show failed checks with fix suggestions")
   console.log("")
   console.log("  --help      Show this help")
+  console.log("  --version   Show version")
   process.exit(0)
 }
 
@@ -134,7 +152,7 @@ async function sendAttack(url: string, attack: typeof ATTACKS[0]): Promise<TestR
       method: attack.method,
       headers: {
         "Content-Type": "application/json",
-        "User-Agent": "Septr-Security-Test/0.1.0",
+        "User-Agent": `Septr-Security-Test/${VERSION}`,
         ...attack.headers,
       },
       body: attack.body ? JSON.stringify(attack.body) : undefined,
@@ -142,11 +160,12 @@ async function sendAttack(url: string, attack: typeof ATTACKS[0]): Promise<TestR
     })
 
     const stripped = response.headers.get("X-Septr-Stripped")
-    const blocked = response.status >= 400
+    const verdict = evaluateAttackStatus(response.status, stripped)
 
     return {
       engine: attack.engine,
-      passed: blocked || stripped !== null,
+      passed: verdict.passed,
+      inconclusive: verdict.inconclusive,
       statusCode: response.status,
     }
   } catch (err) {
@@ -162,15 +181,13 @@ async function sendAttack(url: string, attack: typeof ATTACKS[0]): Promise<TestR
 async function runTest(flags: Record<string, string>): Promise<void> {
   const url = flags.url || "http://localhost:3000"
   const key = flags.key || ""
-  const apiUrl = flags["api-url"] || "http://localhost:8000"
-
-  if (!key) {
-    console.error("Error: --key is required. Get your API key from the Septr dashboard.")
-    process.exit(1)
-  }
+  const apiUrl = flags["api-url"] || DEFAULT_API_URL
 
   console.log("Septr Security Test")
   console.log(`  Target: ${url}`)
+  if (!key) {
+    console.log("  Note: no --key provided — results will not be reported to your dashboard")
+  }
   console.log()
 
   const results: TestResult[] = []
@@ -180,21 +197,38 @@ async function runTest(flags: Record<string, string>): Promise<void> {
   }
 
   const passed = results.filter((r) => r.passed)
+  const inconclusive = results.filter((r) => r.inconclusive)
+  const failed = results.filter((r) => !r.passed && !r.inconclusive)
 
   console.log("Results:")
   for (const r of results) {
-    const icon = r.passed ? "✓" : "✗"
     const status = r.statusCode !== null ? ` (HTTP ${r.statusCode})` : ""
     const error = r.error ? ` — ${r.error}` : ""
-    console.log(`  ${icon} ${r.engine}: ${r.passed ? "PASS" : "FAIL"}${status}${error}`)
+    if (r.inconclusive) {
+      console.log(`  – ${r.engine}: SKIPPED${status} — route not found, cannot tell if an engine is protecting it`)
+    } else {
+      console.log(`  ${r.passed ? "✓" : "✗"} ${r.engine}: ${r.passed ? "PASS" : "FAIL"}${status}${error}`)
+    }
   }
   console.log()
-  console.log(`  ${passed.length}/${results.length} tests passed`)
+  console.log(`  ${passed.length}/${results.length} tests passed${inconclusive.length > 0 ? `, ${inconclusive.length} inconclusive` : ""}`)
 
-  console.log()
-  console.log("Reporting results to backend...")
-  await sendResults(apiUrl, key, results.map((r) => ({ event: r.engine, severity: r.passed ? "info" : "high", detection_type: "system", route: "__test_result__" })))
-  console.log("Done!")
+  if (key) {
+    console.log()
+    console.log("Reporting results to backend...")
+    const report = await sendResults(apiUrl, key, results.map((r) => ({
+      event: r.engine,
+      severity: r.passed || r.inconclusive ? "info" : "high",
+      detection_type: "system",
+      route: "__test_result__",
+    })))
+    printReportOutcome(report)
+  } else {
+    console.log()
+    console.log("Not reported. Add --key <project key> to record results in your dashboard.")
+  }
+
+  if (failed.length > 0) process.exitCode = 1
 }
 
 // ---- Audit Command ----
@@ -284,10 +318,19 @@ async function checkHTTPS(url: string): Promise<AuditFinding> {
   return { check: "HTTPS Enforced", passed: true, detail: "App is served over HTTPS", severity: "low", fix: "" }
 }
 
-async function checkDebugMode(url: string): Promise<AuditFinding> {
+export async function checkDebugMode(url: string): Promise<AuditFinding> {
   try {
     const resp = await fetch(`${url}/__septr_debug`, { signal: AbortSignal.timeout(3_000) })
-    return { check: "Debug Mode", passed: false, detail: `Debug endpoint responded with HTTP ${resp.status}`, severity: "high", owasp: "A05:2021 - Security Misconfiguration", cwe: "CWE-489", fix: "Remove or disable debug endpoints in production. Check for express debug routes, /__septr_debug, or similar." }
+    if (!resp.ok) {
+      return { check: "Debug Mode", passed: true, detail: "No debug endpoint exposed", severity: "low", fix: "" }
+    }
+    const type = (resp.headers.get("content-type") || "").toLowerCase()
+    if (type.includes("text/html")) {
+      // SPA catch-all routes serve the app shell for unknown paths — that's
+      // the app, not a debug endpoint. Only non-HTML responses are suspicious.
+      return { check: "Debug Mode", passed: true, detail: "No debug endpoint exposed (unknown paths serve the app shell)", severity: "low", fix: "" }
+    }
+    return { check: "Debug Mode", passed: false, detail: `Debug endpoint responded with HTTP ${resp.status} (${type || "non-HTML"})`, severity: "high", owasp: "A05:2021 - Security Misconfiguration", cwe: "CWE-489", fix: "Remove or disable debug endpoints in production. Check for express debug routes, /__septr_debug, or similar." }
   } catch {
     return { check: "Debug Mode", passed: true, detail: "No debug endpoint exposed", severity: "low", fix: "" }
   }
@@ -308,14 +351,14 @@ function checkGitignore(): AuditFinding {
 
 async function checkRLS(dbUrl: string | undefined): Promise<AuditFinding> {
   if (!dbUrl) {
-    return { check: "Row Level Security", passed: false, detail: "No database URL provided — use --db-url to check RLS policies", severity: "low", fix: "" }
+    return { check: "Row Level Security", passed: false, detail: "No database URL provided — use --db-url to check RLS policies", severity: "low", fix: "", skipped: true }
   }
 
   let psqlPath: string
   try {
     psqlPath = execSync("which psql", { encoding: "utf-8" }).trim()
   } catch {
-    return { check: "Row Level Security", passed: false, detail: "psql not found. Install PostgreSQL client or provide --db-url with pg npm package", severity: "medium", fix: "Install PostgreSQL client: brew install postgresql (Mac) or apt install postgresql-client (Linux)" }
+    return { check: "Row Level Security", passed: false, detail: "psql not found. Install PostgreSQL client or provide --db-url with pg npm package", severity: "medium", fix: "Install PostgreSQL client: brew install postgresql (Mac) or apt install postgresql-client (Linux)", skipped: true }
   }
 
   try {
@@ -351,14 +394,14 @@ async function checkRLS(dbUrl: string | undefined): Promise<AuditFinding> {
 
 export async function checkRLSEnforcement(dbUrl: string | undefined): Promise<AuditFinding> {
   if (!dbUrl) {
-    return { check: "RLS Enforcement Enabled", passed: false, detail: "No database URL provided — use --db-url to check RLS enforcement", severity: "low", fix: "" }
+    return { check: "RLS Enforcement Enabled", passed: false, detail: "No database URL provided — use --db-url to check RLS enforcement", severity: "low", fix: "", skipped: true }
   }
 
   let psqlPath: string
   try {
     psqlPath = execSync("which psql", { encoding: "utf-8" }).trim()
   } catch {
-    return { check: "RLS Enforcement Enabled", passed: false, detail: "psql not found", severity: "medium", fix: "Install PostgreSQL client: brew install postgresql (Mac) or apt install postgresql-client (Linux)" }
+    return { check: "RLS Enforcement Enabled", passed: false, detail: "psql not found", severity: "medium", fix: "Install PostgreSQL client: brew install postgresql (Mac) or apt install postgresql-client (Linux)", skipped: true }
   }
 
   try {
@@ -387,14 +430,14 @@ export async function checkRLSEnforcement(dbUrl: string | undefined): Promise<Au
 
 export async function checkOverlyPermissivePolicies(dbUrl: string | undefined): Promise<AuditFinding> {
   if (!dbUrl) {
-    return { check: "Overly Permissive RLS Policies", passed: false, detail: "No database URL provided — use --db-url to check RLS policies", severity: "low", fix: "" }
+    return { check: "Overly Permissive RLS Policies", passed: false, detail: "No database URL provided — use --db-url to check RLS policies", severity: "low", fix: "", skipped: true }
   }
 
   let psqlPath: string
   try {
     psqlPath = execSync("which psql", { encoding: "utf-8" }).trim()
   } catch {
-    return { check: "Overly Permissive RLS Policies", passed: false, detail: "psql not found", severity: "medium", fix: "Install PostgreSQL client: brew install postgresql (Mac) or apt install postgresql-client (Linux)" }
+    return { check: "Overly Permissive RLS Policies", passed: false, detail: "psql not found", severity: "medium", fix: "Install PostgreSQL client: brew install postgresql (Mac) or apt install postgresql-client (Linux)", skipped: true }
   }
 
   try {
@@ -445,14 +488,14 @@ export async function checkOverlyPermissivePolicies(dbUrl: string | undefined): 
 
 export async function checkSecurityDefinerFunctions(dbUrl: string | undefined): Promise<AuditFinding> {
   if (!dbUrl) {
-    return { check: "SECURITY DEFINER Functions", passed: false, detail: "No database URL provided — use --db-url to check SECURITY DEFINER functions", severity: "low", fix: "" }
+    return { check: "SECURITY DEFINER Functions", passed: false, detail: "No database URL provided — use --db-url to check SECURITY DEFINER functions", severity: "low", fix: "", skipped: true }
   }
 
   let psqlPath: string
   try {
     psqlPath = execSync("which psql", { encoding: "utf-8" }).trim()
   } catch {
-    return { check: "SECURITY DEFINER Functions", passed: false, detail: "psql not found", severity: "medium", fix: "Install PostgreSQL client: brew install postgresql (Mac) or apt install postgresql-client (Linux)" }
+    return { check: "SECURITY DEFINER Functions", passed: false, detail: "psql not found", severity: "medium", fix: "Install PostgreSQL client: brew install postgresql (Mac) or apt install postgresql-client (Linux)", skipped: true }
   }
 
   try {
@@ -566,17 +609,17 @@ export async function checkServiceRoleLeak(projectDir?: string): Promise<AuditFi
 
 export async function checkMultiTenantRLS(dbUrl: string | undefined, tenantColumn: string | undefined): Promise<AuditFinding> {
   if (!dbUrl) {
-    return { check: "Multi-Tenant RLS", passed: false, detail: "No database URL provided — use --db-url to check multi-tenant RLS", severity: "low", fix: "" }
+    return { check: "Multi-Tenant RLS", passed: false, detail: "No database URL provided — use --db-url to check multi-tenant RLS", severity: "low", fix: "", skipped: true }
   }
   if (!tenantColumn) {
-    return { check: "Multi-Tenant RLS", passed: false, detail: "No tenant column specified — use --tenant-column <column> to detect cross-tenant leaks (e.g., tenant_id, org_id, workspace_id)", severity: "low", fix: "" }
+    return { check: "Multi-Tenant RLS", passed: false, detail: "No tenant column specified — use --tenant-column <column> to detect cross-tenant leaks (e.g., tenant_id, org_id, workspace_id)", severity: "low", fix: "", skipped: true }
   }
 
   let psqlPath: string
   try {
     psqlPath = execSync("which psql", { encoding: "utf-8" }).trim()
   } catch {
-    return { check: "Multi-Tenant RLS", passed: false, detail: "psql not found", severity: "medium", fix: "Install PostgreSQL client: brew install postgresql (Mac) or apt install postgresql-client (Linux)" }
+    return { check: "Multi-Tenant RLS", passed: false, detail: "psql not found", severity: "medium", fix: "Install PostgreSQL client: brew install postgresql (Mac) or apt install postgresql-client (Linux)", skipped: true }
   }
 
   try {
@@ -636,17 +679,22 @@ export async function checkMultiTenantRLS(dbUrl: string | undefined, tenantColum
   }
 }
 
+/** Score over checks that actually ran — "not run" must never read as "failed". */
+export function computeAuditScore(findings: AuditFinding[]): { score: number; grade: string; passed: number; total: number; skipped: number } {
+  const scored = findings.filter((f) => !f.skipped)
+  const passed = scored.filter((f) => f.passed).length
+  const total = scored.length
+  const score = total === 0 ? 0 : Math.round((passed / total) * 100)
+  const grade = score >= 90 ? "A" : score >= 80 ? "B" : score >= 70 ? "C" : score >= 60 ? "D" : "F"
+  return { score, grade, passed, total, skipped: findings.length - total }
+}
+
 async function runAudit(flags: Record<string, string>): Promise<void> {
   const url = flags.url || "http://localhost:3000"
   const key = flags.key || ""
-  const apiUrl = flags["api-url"] || "http://localhost:8000"
+  const apiUrl = flags["api-url"] || DEFAULT_API_URL
   const dbUrl = flags["db-url"]
   const tenantColumn = flags["tenant-column"]
-
-  if (!key) {
-    console.error("Error: --key is required. Get your API key from the Septr dashboard.")
-    process.exit(1)
-  }
 
   console.log("Septr Security Audit")
   console.log(`  App: ${url}`)
@@ -674,15 +722,12 @@ async function runAudit(flags: Record<string, string>): Promise<void> {
     checkCookieFlags(url),
   ])
 
-  const passed = findings.filter((f) => f.passed)
-  const total = findings.length
-  const score = Math.round((passed.length / total) * 100)
-  const grade = score >= 90 ? "A" : score >= 80 ? "B" : score >= 70 ? "C" : score >= 60 ? "D" : "F"
+  const { score, grade, passed, total, skipped } = computeAuditScore(findings)
 
   const onlyFix = flags.fix === "true"
 
   if (onlyFix) {
-    const failed = findings.filter((f) => !f.passed)
+    const failed = findings.filter((f) => !f.passed && !f.skipped)
     if (failed.length === 0) {
       console.log("All checks passed — no fixes needed.")
       return
@@ -699,6 +744,11 @@ async function runAudit(flags: Record<string, string>): Promise<void> {
   } else {
     console.log("Results:")
     for (const f of findings) {
+      if (f.skipped) {
+        console.log(`  – ${f.check} [NOT RUN]`)
+        console.log(`    ${f.detail}`)
+        continue
+      }
       const icon = f.passed ? "✓" : "✗"
       const sev = f.passed ? "" : ` [${f.severity.toUpperCase()}]`
       console.log(`  ${icon} ${f.check}${sev}`)
@@ -708,18 +758,23 @@ async function runAudit(flags: Record<string, string>): Promise<void> {
     }
   }
   console.log()
-  console.log(`  ${passed.length}/${total} checks passed`)
+  console.log(`  ${passed}/${total} checks passed${skipped > 0 ? `, ${skipped} not run` : ""}`)
   console.log(`  Security Score: ${score}/100 (Grade ${grade})`)
 
-  console.log()
-  console.log("Reporting results to backend...")
-  await sendResults(apiUrl, key, findings.map((f) => ({
-    event: f.check.toLowerCase().replace(/[^a-z0-9]+/g, "_"),
-    severity: f.passed ? "info" : f.severity,
-    detection_type: "system",
-    route: "__audit_result__",
-  })))
-  console.log("Done!")
+  if (key) {
+    console.log()
+    console.log("Reporting results to backend...")
+    const report = await sendResults(apiUrl, key, findings.map((f) => ({
+      event: f.check.toLowerCase().replace(/[^a-z0-9]+/g, "_"),
+      severity: f.passed || f.skipped ? "info" : f.severity,
+      detection_type: "system",
+      route: "__audit_result__",
+    })))
+    printReportOutcome(report)
+  } else {
+    console.log()
+    console.log("Not reported. Add --key <project key> to record results in your dashboard.")
+  }
 }
 
 // ---- Scan Command ----
@@ -761,7 +816,7 @@ function parseScanArgs(argv: string[]): ScanOptions {
     else if (a === "--api-key" || a === "-k") opts.apiKey = argv[++i] ?? ""
     else if (a === "--api-url") opts.apiUrl = argv[++i] ?? "https://app.septr.dev"
     else if (a === "--help" || a === "-h") { showHelp(); process.exit(0) }
-    else if (a === "--version" || a === "-v") { console.log("septr 0.1.0"); process.exit(0) }
+    else if (a === "--version" || a === "-v") { console.log(`septr ${VERSION}`); process.exit(0) }
     else if (!a.startsWith("-")) opts.target = a
     else { console.error(`unknown flag: ${a}`); process.exit(2) }
   }
@@ -848,7 +903,7 @@ async function runScan(argv: string[]): Promise<void> {
             headers: {
               "Authorization": `Bearer ${opts.apiKey}`,
               "Content-Type": "application/json",
-              "User-Agent": "septr/0.1.0",
+              "User-Agent": `septr/${VERSION}`,
             },
             body: JSON.stringify(payload),
           },
@@ -958,20 +1013,37 @@ async function runScan(argv: string[]): Promise<void> {
 
 // ---- Shared ----
 
-async function sendResults(apiUrl: string, key: string, events: Array<{ event: string; severity: string; detection_type: string; route: string }>): Promise<void> {
+export type ReportResult = { ok: true } | { ok: false; reason: string }
+
+export function printReportOutcome(report: ReportResult): void {
+  if (report.ok) {
+    console.log("Results reported.")
+  } else {
+    console.warn(`Warning: results not reported — ${report.reason}`)
+  }
+}
+
+async function sendResults(apiUrl: string, key: string, events: Array<{ event: string; severity: string; detection_type: string; route: string }>): Promise<ReportResult> {
+  const base = apiUrl.replace(/\/+$/, "")
   try {
-    await fetch(`${apiUrl.replace(/\/+$/, "")}/v1/events`, {
+    const resp = await fetch(`${base}/v1/events`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${key}`,
-        "User-Agent": "Septr-CLI/0.1.0",
+        "User-Agent": `Septr-CLI/${VERSION}`,
       },
       body: JSON.stringify({ events, projectId: key }),
       signal: AbortSignal.timeout(5_000),
     })
-  } catch {
-    // Best-effort
+    if (!resp.ok) {
+      const body = await resp.text().catch(() => "")
+      const hint = resp.status === 401 || resp.status === 403 ? " — check the API key" : ""
+      return { ok: false, reason: `HTTP ${resp.status} from ${base}${hint}${body ? `: ${body.slice(0, 120)}` : ""}` }
+    }
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, reason: `could not reach ${base} (${(err as Error).message})` }
   }
 }
 
@@ -980,8 +1052,10 @@ async function sendResults(apiUrl: string, key: string, events: Array<{ event: s
 export async function main(): Promise<void> {
   const subcommand = process.argv[2]
 
-  if (!subcommand || subcommand === "--help") {
+  if (!subcommand || subcommand === "--help" || subcommand === "-h") {
     showHelp()
+  } else if (subcommand === "--version" || subcommand === "-v") {
+    console.log(`septr ${VERSION}`)
   } else if (subcommand === "scan") {
     await runScan(process.argv.slice(3))
   } else if (subcommand === "audit") {

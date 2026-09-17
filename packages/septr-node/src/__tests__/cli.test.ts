@@ -6,30 +6,23 @@ import path from "node:path"
 import {
   checkSecurityHeaders,
   checkCookieFlags,
+  checkDebugMode,
   checkRLSEnforcement,
   checkOverlyPermissivePolicies,
   checkSecurityDefinerFunctions,
   checkServiceRoleLeak,
   checkMultiTenantRLS,
+  evaluateAttackStatus,
+  computeAuditScore,
+  printReportOutcome,
+  ATTACKS,
+  type AuditFinding,
 } from "../cli"
 
 vi.mock("node:child_process")
 const mockExecSync = vi.mocked(execSync)
 
-const ATTACKS: Array<{
-  engine: string
-  method: string
-  path: string
-  body?: unknown
-  headers?: Record<string, string>
-}> = [
-  { engine: "secrets", method: "POST", path: "/", body: { api_key: "sk_test_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZabcd" } },
-  { engine: "sqli", method: "GET", path: "/", body: { q: "1' OR '1'='1" } },
-  { engine: "xss", method: "POST", path: "/", body: { comment: "<script>alert(1)</script>" } },
-  { engine: "bola", method: "GET", path: "/users/99", headers: { Authorization: "Bearer eyJhbGciOiJub25lIn0." + "eyJzdWIiOiI0MiJ9." } },
-  { engine: "ssrf", method: "POST", path: "/", body: { url: "http://169.254." + "169.254/latest/meta-data/" } },
-  { engine: "prompt_injection", method: "POST", path: "/", body: { prompt: "Ignore previous instructions" } },
-]
+
 
 describe("CLI attack payloads", () => {
   it("has 6 attack definitions", () => {
@@ -49,6 +42,14 @@ describe("CLI attack payloads", () => {
     expect(secrets).toBeDefined()
     const body = secrets!.body as Record<string, string>
     expect(body.api_key).toMatch(/^sk_test_/)
+  })
+
+  it("sqli attack carries its payload in the query string, never a GET body", () => {
+    const sqli = ATTACKS.find((a) => a.engine === "sqli")
+    expect(sqli).toBeDefined()
+    expect(sqli!.method).toBe("GET")
+    expect(sqli!.body).toBeUndefined()
+    expect(sqli!.path).toContain(encodeURIComponent("1' OR '1'='1"))
   })
 
   it("bola attack uses unsigned JWT", () => {
@@ -567,5 +568,120 @@ describe("checkMultiTenantRLS", () => {
     const result = await checkMultiTenantRLS("postgresql://localhost:5432/test", "tenant_id")
     expect(result.passed).toBe(false)
     expect(result.severity).toBe("medium")
+  })
+})
+
+describe("evaluateAttackStatus", () => {
+  it("treats 4xx as blocked", () => {
+    expect(evaluateAttackStatus(403, null)).toEqual({ passed: true, inconclusive: false })
+    expect(evaluateAttackStatus(500, null)).toEqual({ passed: true, inconclusive: false })
+  })
+
+  it("treats 404/405 without strip header as inconclusive, not a pass", () => {
+    expect(evaluateAttackStatus(404, null)).toEqual({ passed: false, inconclusive: true })
+    expect(evaluateAttackStatus(405, null)).toEqual({ passed: false, inconclusive: true })
+  })
+
+  it("still counts a 404 with X-Septr-Stripped as protected", () => {
+    expect(evaluateAttackStatus(404, "secrets")).toEqual({ passed: true, inconclusive: false })
+  })
+
+  it("treats 200 without strip header as a real failure", () => {
+    expect(evaluateAttackStatus(200, null)).toEqual({ passed: false, inconclusive: false })
+  })
+
+  it("treats 200 with X-Septr-Stripped as protected", () => {
+    expect(evaluateAttackStatus(200, "secrets")).toEqual({ passed: true, inconclusive: false })
+  })
+})
+
+describe("computeAuditScore", () => {
+  const finding = (passed: boolean, skipped = false): AuditFinding =>
+    ({ check: "x", passed, detail: "", severity: "low", fix: "", skipped })
+
+  it("excludes skipped checks from the score", () => {
+    const result = computeAuditScore([finding(true), finding(true), finding(false, true), finding(false, true)])
+    expect(result).toEqual({ score: 100, grade: "A", passed: 2, total: 2, skipped: 2 })
+  })
+
+  it("grades over checks that ran", () => {
+    const findings = [
+      ...Array.from({ length: 6 }, () => finding(true)),
+      ...Array.from({ length: 4 }, () => finding(false)),
+      finding(false, true),
+    ]
+    const result = computeAuditScore(findings)
+    expect(result.score).toBe(60)
+    expect(result.grade).toBe("D")
+    expect(result.skipped).toBe(1)
+  })
+
+  it("returns 0/F when everything was skipped", () => {
+    const result = computeAuditScore([finding(false, true)])
+    expect(result).toEqual({ score: 0, grade: "F", passed: 0, total: 0, skipped: 1 })
+  })
+})
+
+describe("checkDebugMode", () => {
+  let mockFetch: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    mockFetch = vi.fn()
+    vi.stubGlobal("fetch", mockFetch)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("passes when unknown paths serve the SPA shell", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ "content-type": "text/html; charset=utf-8" }),
+    })
+    const result = await checkDebugMode("http://localhost:3000")
+    expect(result.passed).toBe(true)
+  })
+
+  it("passes when the endpoint 404s", async () => {
+    mockFetch.mockResolvedValue({ ok: false, status: 404, headers: new Headers() })
+    const result = await checkDebugMode("http://localhost:3000")
+    expect(result.passed).toBe(true)
+  })
+
+  it("fails when a non-HTML debug endpoint responds", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ "content-type": "application/json" }),
+    })
+    const result = await checkDebugMode("http://localhost:3000")
+    expect(result.passed).toBe(false)
+    expect(result.severity).toBe("high")
+  })
+
+  it("passes when the app is unreachable", async () => {
+    mockFetch.mockRejectedValue(new Error("connect ECONNREFUSED"))
+    const result = await checkDebugMode("http://localhost:3000")
+    expect(result.passed).toBe(true)
+  })
+})
+
+describe("printReportOutcome", () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it("confirms success", () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {})
+    printReportOutcome({ ok: true })
+    expect(log).toHaveBeenCalledWith("Results reported.")
+  })
+
+  it("warns with the reason on failure", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    printReportOutcome({ ok: false, reason: "HTTP 401 from https://app.septr.dev — check the API key" })
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("HTTP 401"))
   })
 })
