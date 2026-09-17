@@ -63,16 +63,45 @@ function isGoModCache(parentDir: string, entry: string): boolean {
 const MAX_FILE_BYTES = 4 * 1024 * 1024
 
 const TEXT_EXT = new Set([
-  ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".json", ".yml", ".yaml",
-  ".toml", ".md", ".txt", ".html", ".htm", ".css", ".sql", ".py", ".rb",
-  ".go", ".rs", ".sh", ".properties", ".cfg", ".ini", ".conf",
-  ".tsbuildinfo", ".env", ".local",
+  ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts", ".json",
+  ".yml", ".yaml", ".toml", ".md", ".markdown", ".txt", ".html", ".htm",
+  ".css", ".sql", ".py", ".rb", ".go", ".rs", ".sh", ".properties", ".cfg",
+  ".ini", ".conf", ".tsbuildinfo", ".env", ".local",
+  // Web frameworks common in AI-generated apps
+  ".vue", ".svelte", ".astro", ".mdx", ".php",
+  // Other languages seen leaking in the corpus
+  ".java", ".kt", ".kts", ".cs", ".c", ".cc", ".cpp", ".h", ".hpp",
+  ".swift", ".dart", ".scala", ".lua", ".pl", ".ex", ".exs",
+  // Templates and stylesheets
+  ".scss", ".sass", ".less", ".hbs", ".ejs", ".pug", ".jinja", ".j2",
+  ".liquid", ".twig",
+  // Schema / infrastructure / scripts
+  ".graphql", ".gql", ".prisma", ".tf", ".tfvars", ".hcl", ".gradle",
+  ".ps1", ".bat", ".cmd",
+])
+
+/** Extensionless files that commonly carry config, tokens, or credentials. */
+const TEXT_FILENAMES = new Set([
+  "dockerfile", "makefile", "procfile", "gemfile", "rakefile", "vagrantfile",
+  "jenkinsfile", "caddyfile", "justfile", "brewfile",
+  ".npmrc", ".yarnrc", ".yarnrc.yml", ".pypirc", ".netrc", ".htpasswd",
+  ".git-credentials", ".envrc", ".flaskenv",
+])
+
+/** Hidden entries are skipped as build/VCS noise — except these, which are
+ *  scanned because they routinely hold registry tokens and credentials. */
+const HIDDEN_TEXT_FILES = new Set([
+  ".npmrc", ".yarnrc", ".yarnrc.yml", ".pypirc", ".netrc", ".htpasswd",
+  ".git-credentials", ".envrc", ".flaskenv",
 ])
 
 function isTextish(name: string): boolean {
-  const base = name.slice(name.lastIndexOf("."))
-  if (TEXT_EXT.has(base)) return true
-  return name === ".env" || name.startsWith(".env.")
+  const lower = name.toLowerCase()
+  if (name === ".env" || name.startsWith(".env.")) return true
+  if (TEXT_FILENAMES.has(lower)) return true
+  if (lower.startsWith("dockerfile.")) return true
+  const base = name.slice(name.lastIndexOf(".")).toLowerCase()
+  return TEXT_EXT.has(base)
 }
 
 export interface ScanFinding {
@@ -178,7 +207,7 @@ export function scanDir(root: string, extraIgnore: string[] = []): ScanResult {
         rootGitignore = true
         continue
       }
-      if (entry.startsWith(".") && entry !== ".env" && !entry.startsWith(".env.")) {
+      if (entry.startsWith(".") && entry !== ".env" && !entry.startsWith(".env.") && !HIDDEN_TEXT_FILES.has(entry)) {
         continue
       }
       let st: ReturnType<typeof statSync>

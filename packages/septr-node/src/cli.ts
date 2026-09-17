@@ -74,7 +74,7 @@ export function evaluateAttackStatus(status: number, stripped: string | null): {
   return { passed: blocked || stripped !== null, inconclusive: routeMissing && stripped === null }
 }
 
-interface AuditFinding {
+export interface AuditFinding {
   check: string
   passed: boolean
   detail: string

@@ -82,3 +82,30 @@ test("every finding is redacted", () => {
     }
   })
 })
+
+test("vibe-code file types are scanned, not silently skipped", () => {
+  const dir = mkdtempSync(join(tmpdir(), "septr-ext-"))
+  try {
+    const files = [
+      "App.vue", "Page.svelte", "index.astro", "content.mdx", "schema.prisma",
+      "Dockerfile", "Dockerfile.prod", "Makefile", "index.php", "Main.java",
+      "main.tf", "styles.scss", "deploy.ps1", "queries.graphql", "app.mts",
+      ".npmrc",
+    ]
+    for (const f of files) {
+      writeFileSync(join(dir, f), `const k = "${STRIPE_FIXTURE}"\n`)
+    }
+    const r = scanDir(dir)
+    const scanned = new Set(r.findings.map((f) => f.file))
+    for (const f of files) {
+      assert.ok(scanned.has(f), `${f} was skipped by the scanner`)
+    }
+    assert.equal(r.files, files.length)
+    // unrelated hidden files stay skipped
+    writeFileSync(join(dir, ".eslintignore"), `const k = "${STRIPE_FIXTURE}"\n`)
+    const r2 = scanDir(dir)
+    assert.ok(!new Set(r2.findings.map((f) => f.file)).has(".eslintignore"))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
