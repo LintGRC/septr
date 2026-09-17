@@ -1,3 +1,14 @@
+## 0.1.29 — 2026-09-17
+
+### Fixed — `septr scan <url>` noise
+- **Injection engines no longer run on fetched remote content.** The SQLi/
+  XSS/SSRF detectors target attacker-controlled input; running them on a
+  site's own HTML/JS flagged every `<script src>` tag as `xss_script_tag`
+  and ordinary strings as injection attempts. URL-mode scanning of pages,
+  bundles, probe responses and manifests is now secrets-only, matching the
+  dashboard scanner's bundle checks. Local directory scans are unchanged
+  (full engine set).
+
 ## 0.1.28 — 2026-09-17
 
 ### Fixed — scan ↔ dashboard reconcile
