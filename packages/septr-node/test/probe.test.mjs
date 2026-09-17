@@ -123,6 +123,12 @@ test("probe detects leaked secrets inside JS bundles", async () => {
     assert.ok(scanned.includes("/app.js"), "JS bundle was scanned")
     assert.ok(r.engineFindings.some((f) => f.patternId === "secret_stripe_live"), "leaked key found in bundle")
     assert.equal(r.bundles, 1, "one bundle scanned")
+    // Remote content is secrets-only: the XSS/SQLi engines target user input,
+    // so every <script src> tag would otherwise be a false positive.
+    assert.ok(
+      !r.engineFindings.some((f) => f.patternId.startsWith(("xss_")) || f.patternId.startsWith("sqli_") || f.patternId.startsWith("ssrf_")),
+      "no injection-engine noise on fetched HTML/JS",
+    )
   } finally {
     server.close()
   }

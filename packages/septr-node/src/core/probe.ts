@@ -11,7 +11,7 @@
 
 import { readFileSync } from "fs"
 import { findChecksFile } from "./resolve-checks"
-import { scanFile, type ScanFinding } from "./scan"
+import { scanRemoteText, type ScanFinding } from "./scan"
 
 export interface ProbePath {
   path: string
@@ -265,7 +265,7 @@ export async function probeUrl(rawBase: string, opts: ProbeOptions = {}): Promis
     }
     // MIT detection on the body — the same engine the SDK runs at runtime,
     // so CLI findings match what the middleware would catch.
-    engineFindings.push(...scanFile(body, p.path))
+    engineFindings.push(...scanRemoteText(body, p.path))
     if (p.content && !p.content.test(body)) return
     findings.push({
       patternId: `probe_${p.path.replace(/[^a-zA-Z0-9]/g, "_").replace(/^_+|_+$/g, "").slice(0, 40)}`,
@@ -286,7 +286,7 @@ export async function probeUrl(rawBase: string, opts: ProbeOptions = {}): Promis
     rootHeaders = resp.headers
     if (resp.status === 200) {
       const body = await readCapped(resp)
-      engineFindings.push(...scanFile(body, "/"))
+      engineFindings.push(...scanRemoteText(body, "/"))
       const ctype = resp.headers.get("content-type") || ""
       // fingerprint/crawl when the root is HTML — by content type, or by
       // body sniff when the server omits the header (common in minimal apps)
@@ -316,7 +316,7 @@ export async function probeUrl(rawBase: string, opts: ProbeOptions = {}): Promis
           if (len > MAX_BUNDLE_BYTES) continue
           const body = await readCapped(resp, MAX_BUNDLE_BYTES)
           const rel = new URL(url).pathname
-          const ef = scanFile(body, rel)
+          const ef = scanRemoteText(body, rel)
           engineFindings.push(...ef)
           if (ef.length > 0) bundleCount++
         } catch {
@@ -338,7 +338,7 @@ export async function probeUrl(rawBase: string, opts: ProbeOptions = {}): Promis
       requests += 1
       if (resp.status !== 200) continue
       const body = await readCapped(resp, MAX_MANIFEST_BYTES)
-      const ef = scanFile(body, mpath)
+      const ef = scanRemoteText(body, mpath)
       if (ef.length > 0) {
         engineFindings.push(...ef)
         manifestCount++
@@ -371,7 +371,7 @@ export async function probeUrl(rawBase: string, opts: ProbeOptions = {}): Promis
           requests += 1
           if (resp.status !== 404) {
             const body = await readCapped(resp)
-            engineFindings.push(...scanFile(body, path))
+            engineFindings.push(...scanRemoteText(body, path))
             endpoints.push({
               path,
               status: resp.status,
