@@ -1,3 +1,22 @@
+## 0.1.28 — 2026-09-17
+
+### Fixed — scan ↔ dashboard reconcile
+- **CLI-attached findings now merge with dashboard incidents.** Findings sent
+  by `--attach` used the local engine's names, so the same issue (e.g. an
+  exposed Stripe key) appeared twice on a project — once from a web scan and
+  once from the CLI — and the CLI's copy could not update the web's. Attach
+  payloads now use the web scanner's canonical `check_id`, name, and severity
+  for shared checks, and the same naming for probe files
+  (`Sensitive file exposed: /.env`, `Live secret exposed in /.env`).
+- **Header findings are per-header.** URL mode now reports one finding per
+  missing header — `HSTS header missing`, `Content-Security-Policy header
+  missing`, `X-Content-Type-Options header missing`, `X-Frame-Options header
+  missing`, `Referrer-Policy header missing` — matching the web scanner so
+  each class reconciles independently. `Referrer-Policy` is newly checked.
+- CLI attaches are add-only server-side now: a CLI scan no longer marks
+  incidents "fixed" for checks it doesn't cover (OSV, GraphQL, CORS,
+  hallucinated packages). Resolution happens on the next web re-scan.
+
 ## 0.1.27 — 2026-09-17
 
 ### Added — `septr scan <url>`
