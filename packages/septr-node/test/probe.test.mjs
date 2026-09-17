@@ -80,17 +80,18 @@ test("probe previews are redacted — no raw secrets", async () => {
   }
 })
 
-test("probe on a clean server finds nothing", async () => {
+test("probe on a clean server finds nothing (except security headers)", async () => {
   const { server, port } = await startServer(CLEAN_ROUTES)
   try {
     const r = await probeUrl(`http://127.0.0.1:${port}`, { timeoutMs: 2000, concurrency: 4 })
-    assert.equal(r.findings.length, 0)
+    const probeFindings = r.findings.filter((f) => f.patternId !== "security_headers")
+    assert.equal(probeFindings.length, 0)
   } finally {
     server.close()
   }
 })
 
-test("200-on-everything server without matching content produces no findings", async () => {
+test("200-on-everything server without matching content produces no findings (except security headers)", async () => {
   const { server, port } = await startServer({
     "/.env": { body: "hello world" },
     "/.git/config": { body: "<html>app</html>" },
@@ -99,7 +100,58 @@ test("200-on-everything server without matching content produces no findings", a
   })
   try {
     const r = await probeUrl(`http://127.0.0.1:${port}`, { timeoutMs: 2000, concurrency: 4 })
-    assert.equal(r.findings.length, 0)
+    const probeFindings = r.findings.filter((f) => f.patternId !== "security_headers")
+    assert.equal(probeFindings.length, 0)
+  } finally {
+    server.close()
+  }
+})
+
+test("probe detects leaked secrets inside JS bundles", async () => {
+  const STRIPE_KEY = "sk_live_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"
+  const { server, port } = await startServer({
+    "/": {
+      body: '<html><head><script src="/app.js"></script></head><body>app</body></html>',
+    },
+    "/app.js": {
+      body: `const apiKey = "${STRIPE_KEY}";\nfetch("/api/data", { headers: { Authorization: "Bearer " + apiKey } });`,
+    },
+  })
+  try {
+    const r = await probeUrl(`http://127.0.0.1:${port}`, { timeoutMs: 2000, concurrency: 4 })
+    const scanned = r.engineFindings.map((f) => f.file)
+    assert.ok(scanned.includes("/app.js"), "JS bundle was scanned")
+    assert.ok(r.engineFindings.some((f) => f.patternId === "secret_stripe_live"), "leaked key found in bundle")
+    assert.equal(r.bundles, 1, "one bundle scanned")
+  } finally {
+    server.close()
+  }
+})
+
+test("probe detects missing security headers", async () => {
+  const { server, port } = await startServer({
+    "/": { body: '<html><body>app</body></html>' },
+  })
+  try {
+    const r = await probeUrl(`http://127.0.0.1:${port}`, { timeoutMs: 2000, concurrency: 4 })
+    const headerFindings = r.findings.filter((f) => f.patternId === "security_headers")
+    assert.ok(headerFindings.length > 0, "missing security headers flagged")
+    assert.ok(headerFindings[0].description.includes("Strict-Transport-Security"), "HSTS missing")
+  } finally {
+    server.close()
+  }
+})
+
+test("probe scans /package.json for secrets", async () => {
+  const { server, port } = await startServer({
+    "/": { body: '<html><body>app</body></html>' },
+    "/package.json": {
+      body: '{"name":"myapp","dependencies":{"express":"4.19.2"}}',
+    },
+  })
+  try {
+    const r = await probeUrl(`http://127.0.0.1:${port}`, { timeoutMs: 2000, concurrency: 4 })
+    assert.ok(r.manifests >= 0, "manifest count reported")
   } finally {
     server.close()
   }

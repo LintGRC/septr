@@ -99,6 +99,14 @@ npx septr scan . --exclude "src/__tests__/**"   # skip paths (repeatable)
 
 Exclude paths with a committed `.septrignore` file (gitignore-style patterns, anchored to the directory it lives in; nested files are honored when scanning a parent directory) — exclusions are explicit and auditable. Test fixture payloads (`__tests__/benchmark/**`, `*-payloads.*`, `fixtures/**`, at any depth) are skipped by default; everything else, including tests, is scanned. The summary line separates files scanned, files ignored by rules, and entries skipped entirely (dependency/build dirs, hidden files, non-source files).
 
+## Deployed-app scanning (CLI)
+
+```bash
+npx septr scan https://your-app.example.com
+```
+
+Probes a deployed app for exposed secrets, sensitive paths, and missing security headers. Fetches up to 30 JS bundles from `<script src>` tags and scans them for leaked keys. Checks `/package.json` and `/requirements.txt` for secrets. Reports missing HSTS, CSP, and clickjack protection headers.
+
 ## Environment variables
 
 - `SEPTR_API_KEY` — your project key

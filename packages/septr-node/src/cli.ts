@@ -867,7 +867,7 @@ async function runScan(argv: string[]): Promise<void> {
       concurrency: opts.concurrency,
     })
     findings = [...result.findings, ...result.engineFindings]
-    extra = { requests: result.requests, fingerprint: result.fingerprint, endpoints: result.endpoints }
+    extra = { requests: result.requests, fingerprint: result.fingerprint, endpoints: result.endpoints, bundles: result.bundles, manifests: result.manifests }
   } else {
     const result = await scanDirAsync(resolve(opts.target), opts.exclude)
     findings = result.findings
@@ -982,7 +982,12 @@ async function runScan(argv: string[]): Promise<void> {
 
   if (!opts.quiet) {
     if (isUrl(opts.target)) {
-      console.log(`septr scan: ${String(extra.requests)} requests, ${findings.length} exposed path(s)`)
+      const bundles = (extra.bundles as number) || 0
+      const manifests = (extra.manifests as number) || 0
+      const parts = [`${extra.requests} requests`, `${findings.length} exposed path(s)`]
+      if (bundles > 0) parts.push(`${bundles} bundle(s) scanned`)
+      if (manifests > 0) parts.push(`${manifests} manifest(s) scanned`)
+      console.log(`septr scan: ${parts.join(", ")}`)
       const fprint = extra.fingerprint as { frameworks?: string[]; server?: string | null } | undefined
       if (fprint && (fprint.frameworks?.length || fprint.server)) {
         console.log(`  fingerprint: ${[...(fprint.frameworks || [])].join(", ") || "unknown"}${fprint.server ? ` · server: ${fprint.server}` : ""}`)

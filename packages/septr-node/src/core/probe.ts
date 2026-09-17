@@ -68,6 +68,8 @@ export interface ProbeResult {
   engineFindings: ScanFinding[]
   fingerprint: Fingerprint
   endpoints: DiscoveredEndpoint[]
+  bundles: number
+  manifests: number
 }
 
 export interface ProbeOptions {
@@ -77,7 +79,11 @@ export interface ProbeOptions {
 }
 
 const MAX_ENDPOINTS = 30
+const MAX_BUNDLES = 30
+const MAX_BUNDLE_BYTES = 10 * 1024 * 1024
 const MAX_BODY_BYTES = 256 * 1024
+const MANIFEST_PATHS = ["/package.json", "/requirements.txt"]
+const MAX_MANIFEST_BYTES = 512 * 1024
 const STATIC_EXT = new Set([
   ".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".webp",
   ".woff", ".woff2", ".ttf", ".eot", ".map", ".txt", ".xml", ".pdf",
@@ -98,6 +104,47 @@ const FRAMEWORK_MARKERS: Array<[string, RegExp]> = [
   ["base44", /base44\.com/i],
   ["windsurf", /windsurf\.com|windsurf\.ai/i],
 ]
+
+function scriptSrcUrls(html: string, base: string): string[] {
+  const urls: string[] = []
+  const seen = new Set<string>()
+  for (const m of html.matchAll(/<script[^>]+src\s*=\s*["']([^"']+)["']/gi)) {
+    const href = m[1]
+    if (!href) continue
+    let url: URL
+    try { url = new URL(href, base) } catch { continue }
+    if (url.origin !== new URL(base).origin) continue
+    const path = url.pathname + url.search
+    if (seen.has(path)) continue
+    seen.add(path)
+    urls.push(url.href)
+  }
+  return urls
+}
+
+function checkSecurityHeaders(headers: Headers): ProbeFinding[] {
+  const findings: ProbeFinding[] = []
+  const missing: string[] = []
+  const hsts = headers.get("strict-transport-security")
+  const csp = headers.get("content-security-policy")
+  const xcto = headers.get("x-content-type-options")
+  const xfo = headers.get("x-frame-options")
+  if (!hsts) missing.push("Strict-Transport-Security (HSTS)")
+  if (!csp) missing.push("Content-Security-Policy")
+  if (!xfo && !csp) missing.push("X-Frame-Options / CSP frame-ancestors (clickjack protection)")
+  if (!xcto) missing.push("X-Content-Type-Options: nosniff")
+  if (missing.length === 0) return findings
+  const severity = missing.some((h) => h.includes("HSTS")) ? "high" : "medium"
+  findings.push({
+    patternId: "security_headers",
+    path: "/",
+    status: 200,
+    severity,
+    description: `Missing security headers: ${missing.join(", ")}`,
+    preview: `Missing: ${missing.join("; ")}`,
+  })
+  return findings
+}
 
 function fingerprintFrom(headers: Headers, body: string): Fingerprint {
   const frameworks: string[] = []
@@ -193,6 +240,8 @@ export async function probeUrl(rawBase: string, opts: ProbeOptions = {}): Promis
   const endpoints: DiscoveredEndpoint[] = []
   let requests = 0
   let fingerprint: Fingerprint = { frameworks: [], server: null, generator: null }
+  let bundleCount = 0
+  let manifestCount = 0
 
   const checkOne = async (p: ProbePath): Promise<void> => {
     let resp: Response
@@ -223,11 +272,13 @@ export async function probeUrl(rawBase: string, opts: ProbeOptions = {}): Promis
     })
   }
 
-  // ── root fetch: fingerprint + crawl seed + engine scan ──
+  // ── root fetch: fingerprint + crawl seed + engine scan + security headers ──
   let rootHtml = ""
+  let rootHeaders: Headers | null = null
   try {
     const resp = await fetchWithTimeout(`${base}/`, timeoutMs)
     requests += 1
+    rootHeaders = resp.headers
     if (resp.status === 200) {
       const body = await readCapped(resp)
       engineFindings.push(...scanFile(body, "/"))
@@ -239,8 +290,57 @@ export async function probeUrl(rawBase: string, opts: ProbeOptions = {}): Promis
         fingerprint = fingerprintFrom(resp.headers, rootHtml)
       }
     }
+    // security header checks — same set as `septr audit`
+    if (rootHeaders) findings.push(...checkSecurityHeaders(rootHeaders))
   } catch {
     // root unreachable — fingerprint stays empty, path checks still run
+  }
+
+  // ── bundle scanning: fetch <script src> JS bundles and scan for secrets ──
+  if (rootHtml) {
+    const scriptUrls = scriptSrcUrls(rootHtml, `${base}/`).slice(0, MAX_BUNDLES)
+    let bi = 0
+    async function bundleWorker(): Promise<void> {
+      while (bi < scriptUrls.length) {
+        const url = scriptUrls[bi++]
+        try {
+          const resp = await fetchWithTimeout(url, timeoutMs)
+          requests += 1
+          if (resp.status !== 200) continue
+          const len = Number(resp.headers.get("content-length") || "0")
+          if (len > MAX_BUNDLE_BYTES) continue
+          const body = await readCapped(resp, MAX_BUNDLE_BYTES)
+          const rel = new URL(url).pathname
+          const ef = scanFile(body, rel)
+          engineFindings.push(...ef)
+          if (ef.length > 0) bundleCount++
+        } catch {
+          // fetch failed — skip silently
+        }
+      }
+    }
+    const bundleWorkers = Array.from(
+      { length: Math.min(concurrency, Math.max(1, scriptUrls.length)) },
+      () => bundleWorker(),
+    )
+    await Promise.all(bundleWorkers)
+  }
+
+  // ── manifest scanning: fetch /package.json and /requirements.txt, scan for secrets ──
+  for (const mpath of MANIFEST_PATHS) {
+    try {
+      const resp = await fetchWithTimeout(`${base}${mpath}`, timeoutMs)
+      requests += 1
+      if (resp.status !== 200) continue
+      const body = await readCapped(resp, MAX_MANIFEST_BYTES)
+      const ef = scanFile(body, mpath)
+      if (ef.length > 0) {
+        engineFindings.push(...ef)
+        manifestCount++
+      }
+    } catch {
+      // skip
+    }
   }
 
   // bounded concurrency
@@ -285,5 +385,5 @@ export async function probeUrl(rawBase: string, opts: ProbeOptions = {}): Promis
     await Promise.all(endpointWorkers)
   }
 
-  return { requests, findings, engineFindings, fingerprint, endpoints }
+  return { requests, findings, engineFindings, fingerprint, endpoints, bundles: bundleCount, manifests: manifestCount }
 }

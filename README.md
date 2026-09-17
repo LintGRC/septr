@@ -26,7 +26,7 @@ go list -m github.com/lintgrc/septr/packages/septr-go
 
 You'll see the public repo (`github.com/LintGRC/septr`), MIT license, and documentation at [septr.dev/docs.html](https://septr.dev/docs.html).
 
-- **Scan** — URL probe of a deployed app: leaked API keys, `.env` exposure, missing headers, known-vulnerable frontend libraries, exposed admin routes.
+- **Scan** — URL probe of a deployed app: leaked API keys, `.env` exposure, secrets inside JS bundles, missing security headers, vulnerable dependencies, exposed admin routes.
 - **Protect** — runtime middleware that detects and (optionally) blocks secret leaks, BOLA/IDOR, missing auth, business-logic tampering, PII in responses, prompt injection, SSRF, and missing rate limits.
 - **Monitor** — dashboard with security score, threat log, and per-engine evidence.
 
