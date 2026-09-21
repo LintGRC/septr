@@ -162,3 +162,36 @@ test("skipped counts account for silent skips (build dirs, hidden, non-source)",
     rmSync(dir, { recursive: true, force: true })
   }
 })
+test("nested .septrignore patterns with **/ match zero directories", () => {
+  const dir = mkdtempSync(join(tmpdir(), "septr-nested-glob-"))
+  try {
+    const pkg = join(dir, "packages", "web")
+    mkdirSync(join(pkg, "fixtures"), { recursive: true })
+    writeFileSync(join(pkg, ".septrignore"), "**/fixtures/**\n")
+    writeFileSync(join(pkg, "fixtures", "leak.ts"), `const k = "${STRIPE_FIXTURE}"\n`)
+    writeFileSync(join(pkg, "app.ts"), `const k = "${STRIPE_FIXTURE}"\n`)
+    const r = scanDir(dir)
+    const scanned = [...new Set(r.findings.map((f) => f.file))]
+    assert.deepEqual(scanned, ["packages/web/app.ts"])
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test(".septrignore metacharacters are literal and cannot crash the scan", () => {
+  const dir = mkdtempSync(join(tmpdir(), "septr-glob-meta-"))
+  try {
+    writeFileSync(join(dir, ".septrignore"), "data[1].ts\nb(roken\n")
+    writeFileSync(join(dir, "data[1].ts"), `const k = "${STRIPE_FIXTURE}"\n`)
+    // An unescaped regex would treat [1] as a character class and match this:
+    writeFileSync(join(dir, "data1.ts"), `const k = "${STRIPE_FIXTURE}"\n`)
+    writeFileSync(join(dir, "app.ts"), `const k = "${STRIPE_FIXTURE}"\n`)
+    const r = scanDir(dir)
+    const scanned = [...new Set(r.findings.map((f) => f.file))]
+    assert.ok(!scanned.includes("data[1].ts"), "literal metachar file ignored")
+    assert.ok(scanned.includes("data1.ts"), "no regex over-match")
+    assert.ok(scanned.includes("app.ts"))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

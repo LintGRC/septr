@@ -34,14 +34,20 @@ function readIgnoreFile(root: string): string[] {
 }
 
 function globToRegExp(pattern: string): RegExp {
-  let out = pattern
+  // Patterns come from user .septrignore files, so regex metacharacters must
+  // be treated as literals — names like `data[1].ts` would otherwise
+  // mis-match or crash the whole scan with an invalid RegExp.
+  let out = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&")
+  out = out
     .split("**").join("\u0000")
     .split("*").join("[^/]*")
     .split("\u0000").join(".*")
-  // A leading `**/` matches zero or more directories, so `**/fixtures/**`
-  // also matches a top-level `fixtures/` at the scan root.
-  out = out.replace(/^\.\*\//, "(?:.*/)?")
-  out = out.replace(/\/$/, "(?:/.*)?$")
+  // `**/` matches zero or more directories — anywhere in the pattern, so
+  // nested ignore files (whose patterns get a directory prefix) work too.
+  out = out.replace(/\.\*\//g, "(?:.*/)?")
+  // A trailing `/` means "directory and everything below it", and does not
+  // match a same-named file (gitignore semantics).
+  out = out.replace(/\/$/, "/(?:.*)?$")
   return new RegExp(`^${out}$`)
 }
 
