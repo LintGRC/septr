@@ -1,3 +1,18 @@
+## 0.1.30 — 2026-09-21
+
+### Fixed — `septr scan`
+- **`.septrignore` metacharacters are literal now.** A pattern like
+  `data[1].ts` was compiled as a regex — it silently mis-matched (`[1]`
+  became a character class) and an unbalanced pattern such as `b(roken`
+  crashed the whole scan with an invalid RegExp.
+- **`**/` matches zero or more directories anywhere in the pattern**, not
+  just at the start. Nested ignore files (whose patterns are re-anchored to
+  the directory that declares them) now silence the intended paths, e.g.
+  `**/benchmark/**` in `packages/web/.septrignore` also covers
+  `packages/web/benchmark/**`.
+- A trailing `/` matches the directory and everything under it, and no
+  longer a same-named file.
+
 ## 0.1.29 — 2026-09-17
 
 ### Fixed — `septr scan <url>` noise
