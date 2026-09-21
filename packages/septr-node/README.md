@@ -105,7 +105,7 @@ Exclude paths with a committed `.septrignore` file (gitignore-style patterns, an
 npx septr scan https://your-app.example.com
 ```
 
-Probes a deployed app for exposed secrets, sensitive paths, and missing security headers. Fetches up to 30 JS bundles from `<script src>` tags and scans them for leaked keys. Checks `/package.json` and `/requirements.txt` for secrets. Reports missing HSTS, CSP, and clickjack protection headers.
+Probes a deployed app for exposed secrets, sensitive paths, and missing security headers. Fetches up to 30 JS bundles referenced by the page and scans them for leaked keys. Checks `/package.json` and `/requirements.txt` for secrets. Reports missing HSTS, CSP, and clickjack protection headers.
 
 ## Environment variables
 

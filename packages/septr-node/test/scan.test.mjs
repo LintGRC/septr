@@ -195,3 +195,13 @@ test(".septrignore metacharacters are literal and cannot crash the scan", () => 
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test("this package scans clean — dogfood invariant", () => {
+  // Comments and docs in this repo must not themselves trip the engines
+  // (a literal script tag in prose is the classic case). This guards the
+  // invariant the fixtures are designed around.
+  const root = new URL("..", import.meta.url).pathname
+  const r = scanDir(root)
+  const findings = r.findings.map((f) => `${f.file}:${f.line ?? "?"} (${f.patternId})`)
+  assert.deepEqual(findings, [])
+})

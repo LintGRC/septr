@@ -301,7 +301,7 @@ export async function probeUrl(rawBase: string, opts: ProbeOptions = {}): Promis
     // root unreachable — fingerprint stays empty, path checks still run
   }
 
-  // ── bundle scanning: fetch <script src> JS bundles and scan for secrets ──
+  // ── bundle scanning: fetch script-tag JS bundles and scan for secrets ──
   if (rootHtml) {
     const scriptUrls = scriptSrcUrls(rootHtml, `${base}/`).slice(0, MAX_BUNDLES)
     let bi = 0

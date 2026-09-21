@@ -202,8 +202,8 @@ export function scanFile(text: string, file: string): ScanFinding[] {
 
 /** Secrets-only scan for fetched remote content. The SQLi/XSS/SSRF engines
  *  target attacker-controlled input, so running them on a site's own HTML/JS
- *  flags every `<script>` tag — URL scans mirror the dashboard scanner's
- *  bundle checks, which are secrets-only. */
+ *  flags every script tag — URL scans mirror the dashboard scanner's bundle
+ *  checks, which are secrets-only. */
 export function scanRemoteText(text: string, file: string): ScanFinding[] {
   return toFindings(detectSecrets(text), "secrets", file, text)
 }
